@@ -1,6 +1,11 @@
 import numpy as np
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
+from KBM import KinematicBicycleModel
+
+N_STATES = 4
+T_HORIZON = 20
+DT = 0.2
 
 def generate_path_from_wp(wp_xs, wp_ys, step=0.1):
     """
@@ -36,8 +41,13 @@ def generate_path_from_wp(wp_xs, wp_ys, step=0.1):
         # Final points
         path_xs = np.append(path_xs, fx(interp_range))
         path_ys = np.append(path_ys, fy(interp_range))
-
-    return np.vstack((path_xs, path_ys))
+    
+    # To get the angle we 
+    dx = np.append(0, np.diff(path_xs))
+    dy = np.append(0, np.diff(path_ys))
+    theta = np.arctan2(dy, dx)
+    
+    return np.vstack((path_xs, path_ys, theta))
 
 def get_nn_idx(state, path):
     """
@@ -47,13 +57,14 @@ def get_nn_idx(state, path):
     """
     # cartesian state
     c_state = state[:2]
+    c_path = path[:2]
 
     # Calculate the distance between the current state and sample points along the path    
-    dist = np.linalg.norm(np.expand_dims(c_state, 1) - path, axis=0)
+    dist = np.linalg.norm(np.expand_dims(c_state, 1) - c_path, axis=0)
     nn_idx = np.argmin(dist)
 
     # If the nn_idx corresponds to the last point in the path, return it.
-    if nn_idx == path.shape[1] - 1:
+    if nn_idx == c_path.shape[1] - 1:
         return nn_idx
     
     # Else we check which index is the correct point to return.
@@ -66,7 +77,7 @@ def get_nn_idx(state, path):
     v /= np.linalg.norm(v)
 
     # 2. Form vector from nn_idx to current state point
-    d = path[:, nn_idx] - c_state
+    d = c_path[:, nn_idx] - c_state
     
     # 3. A positive projection implies that the current state has not surpassed the nearest neighbor point.
     if np.dot(d, v) > 0:
@@ -114,6 +125,53 @@ def get_trajectory_coeffs_body(state, track, n_lookahead):
             cov=False,)
         return coeff, offset_b
 
+def get_reference_trajectory(state, path, target_v, track_step):
+    """ 
+    Based on the target velocity, get a reference trajectory based on number of indices
+    traversed along the precomputed path.
+
+    Params:
+        state: (n_states, 1): In our specific case (x, y, velocity, yaw)
+        path: (3, N) full path that contains (x, y, theta).
+        target_v: target velocity to generate reference trajectory with.
+    Returns:
+        xref: (n_states, T+1): T = horizon
+        dref: all 0's because it's to be optimized for.
+    """
+
+    xref = np.zeros((N_STATES, T_HORIZON + 1))
+    dref = np.zeros((1, T_HORIZON + 1))
+
+    path_length = path.shape[1]
+
+    nn_idx = get_nn_idx(state, path)
+
+    xref[0, 0] = path[0, nn_idx]
+    xref[1, 0] = path[1, nn_idx]
+    xref[2, 0] = target_v
+    xref[3, 0] = path[2, nn_idx]
+    
+    # The track is formed with a step parameter dictating distance between each waypoint.
+    dl = track_step
+    travel = 0.0
+
+    for i in range(T_HORIZON + 1):
+        travel += abs(target_v) * DT
+        n_indices = int(round(travel / dl))
+
+        if (nn_idx + n_indices) < path_length:
+            xref[0, i] = path[0, nn_idx + n_indices]
+            xref[1, i] = path[1, nn_idx + n_indices]
+            xref[2, i] = target_v
+            xref[3, i] = path[2, nn_idx + n_indices]
+        else:
+            xref[0, i] = path[0, path_length - 1]
+            xref[1, i] = path[1, path_length - 1]
+            xref[2, i] = 0.0
+            xref[3, i] = path[2, path_length - 1]
+
+    return xref, dref
+
 if __name__ == "__main__":
     # Horizon
     LOOKAHEAD = 6
@@ -127,10 +185,10 @@ if __name__ == "__main__":
 
     # Find closest index.
     nn_idx = (
-        get_nn_idx(state, track) - 1
+        get_nn_idx(state, track[:2, :]) - 1
     )  # index ox closest wp, take the previous to have a straighter line
     
-    coeff, offset_b = get_trajectory_coeffs_body(state, track, LOOKAHEAD)
+    coeff, offset_b = get_trajectory_coeffs_body(state, track[:2, :], LOOKAHEAD)
     
     x = np.arange(-1, 2, 0.001)  # interp range of curve
 
@@ -149,5 +207,5 @@ if __name__ == "__main__":
     ax2.scatter(track[0, nn_idx:nn_idx+LOOKAHEAD], track[1, nn_idx:nn_idx+LOOKAHEAD])
     ax2.axis("equal")
 
-    plt.show()
-    
+    # plt.show()
+
