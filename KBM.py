@@ -75,3 +75,8 @@ class KinematicBicycleModel:
             x_[:, t] = x_next[1]
         
         return x_
+    
+    def forward_one_step(self, x0, u):
+        tspan = [0, self.DT]
+        x_next = odeint(self.model, x0, tspan, args=(u,))
+        return x_next[1]
