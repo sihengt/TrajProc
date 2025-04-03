@@ -1,0 +1,36 @@
+import sympy
+import numpy as np
+
+def solve_for_beta(delta_f_val, delta_r_val, lf_val, lr_val, R_val):
+    """
+    Solve numerically for beta in the equation:
+
+      delta_f = (1 / (1 + delta_r/delta_f)) * [ arctan(lf/(R cos beta) + tan beta)
+                                                - arctan(lr/(R cos beta) - tan beta) ]
+      (assuming slip angles = 0, etc.)
+
+    All input angles in *radians*.
+    """
+    beta = sympy.Symbol('beta', real=True)
+
+    # Build the big bracket:  arctan( A + tan(beta) ) - arctan( B - tan(beta) )
+    A = lf_val / (R_val * sympy.cos(beta))
+    B = lr_val / (R_val * sympy.cos(beta))
+
+    bracket_expr = sympy.atan(A + sympy.tan(beta)) - sympy.atan(B - sympy.tan(beta))
+
+    # The factor in front: 1 / (1 + delta_r/delta_f)
+    factor_expr = 1.0 / (1.0 + (delta_r_val / delta_f_val))
+
+    # So the right-hand side is factor_expr * bracket_expr
+    rhs_expr = factor_expr * bracket_expr
+
+    # delta_f_val = rhs_expr
+    eq = sympy.Eq(delta_f_val, rhs_expr)
+
+    # Solve numerically. Provide an initial guess, e.g. 0.0
+    sol = sympy.nsolve(eq, beta, 0.0)
+    return float(sol)
+
+sol = solve_for_beta(np.pi/6, np.pi/8, 0.4, 0.6, 5.0)
+print(sol)
