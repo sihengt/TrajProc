@@ -50,6 +50,7 @@ u_bar_start[1, :] = 0.0
 
 l_a = []
 l_d = []
+l_state = []
 
 for sim_time in range(sim_duration - 1):
     # if (sim_time == 120):
@@ -124,7 +125,9 @@ for sim_time in range(sim_duration - 1):
         
 
     u_bar = np.vstack((a_mpc, delta_mpc))
-
+    
+    current_state = x.value[:, 0]
+    l_state.append(current_state)
     x_mpc = np.array(x.value[0, :]).flatten()
     y_mpc = np.array(x.value[1, :]).flatten()
     v_mpc = np.array(x.value[2, :]).flatten()
@@ -169,7 +172,7 @@ ax1.axis("equal")
 ax1.set_ylabel("y")
 ax1.set_xlabel("x")
 
-ax2 = fig.add_subplot(gs[1, 0])
+ax2 = fig.add_subplot(gs[1, 0]) 
 x = np.arange(len(l_a))
 ax2.plot(x, l_a)
 ax2.set_ylabel("acceleration command")
@@ -182,3 +185,10 @@ ax3.set_ylabel("steering command")
 ax3.set_xlabel("time")
 
 plt.show()
+
+accelerations = np.array(l_a)
+deltas = np.array(l_d)
+state = np.array(l_state)
+np.save("cg_d.npy", deltas)
+np.save("cg_a.npy", accelerations)
+np.save("cg_state.npy", state)

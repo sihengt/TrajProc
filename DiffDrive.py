@@ -1,23 +1,8 @@
 import numpy as np
-from DiffDrive import DiffDrive
-from collections import namedtuple
 import matplotlib.pyplot as plt
-
+import matplotlib.patches as mpatches
+from collections import namedtuple
 WheelDims = namedtuple("wheel_dims", ["l", "w"])
-
-wheelbase = 1.0
-
-# Global frame for now
-v_L = np.array([-0.3, 0]).T
-v_R = np.array([-0.5, 0]).T
-
-# velocity vector
-v = (v_L + v_R)/2
-
-# robot position is initially at (0,0)
-# robot state is x, y, psi=yaw
-car_X = np.array([0, 0, 0]).T
-wheel_dims = WheelDims(l=0.3, w=0.1)
 
 class DiffDrive:
     def __init__(self, wheelbase, wheel_dims):
@@ -121,23 +106,3 @@ class DiffDrive:
         ax.scatter(icr_s[0], icr_s[1], label="ICR")
         ax.legend()
         plt.show()
-
-
-dd = DiffDrive(wheelbase, wheel_dims)
-
-dd.state = np.array([2, 4, np.pi/6]).T
-
-fig, ax = plt.subplots()
-ax.set_aspect("equal")
-ax.set_xlim(-5, 5)
-ax.set_ylim(-5, 5)
-dd.draw_car(ax)
-dd.draw_velocity_vectors(np.array([1.0, 1.0]))
-
-# Three things to make a diff-drive robot
-# 1. left wheel / right wheel, a rectangle at position wheelbase/2 away from origin. If yaw is 0, this position is
-# directly up / down (0, +wheelbase/2) (0, -wheelbase/2). If the yaw is nonzero we have some geometry to do.
-# 2. wheel orientation in this case exactly the same as yaw
-# 3. a line with its center at car_X[0:2] connecting both wheels together.
-
-# a rectangle corresponding to left wheel

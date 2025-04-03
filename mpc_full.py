@@ -5,8 +5,6 @@ from scripts import *
 import matplotlib.pyplot as plt
 import time
 
-# This code does MPC for one time step to check that everything is working.
-
 N_STATES = 4
 N_ACTIONS = 2
 L = 0.3
@@ -182,3 +180,8 @@ ax3.set_ylabel("steering command")
 ax3.set_xlabel("time")
 
 plt.show()
+
+deltas = np.array(l_d)
+accels = np.array(l_a)
+np.save("d.npy", deltas)
+np.save("a.npy", accels)
