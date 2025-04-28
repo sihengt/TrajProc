@@ -144,7 +144,7 @@ for sim_time in range(sim_duration - 1):
     l_dr.append(dr_mpc[0])
 
     u_bar = np.vstack((a_mpc, df_mpc, dr_mpc))
-
+    
     # Take first action
     u_sim[:, sim_time] = u_bar[:, 0]
 

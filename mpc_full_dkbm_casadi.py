@@ -13,7 +13,7 @@ N_ACTIONS = 3
 L = 0.3
 l_f = 0.1
 l_r = 0.2
-T = 10          # Time
+T = 10          # MPC horizon
 N = 50          # Control Interval
 DT = 0.2        # dt = T/N
 
@@ -65,7 +65,7 @@ for sim_time in range(sim_duration - 1):
         x_bar = np.zeros((N_STATES, T + 1))
         x_bar_compare = np.zeros((N_STATES, T + 1))
         x_bar[:, 0] = x_sim[:, sim_time]
-        x_bar_compare[:, 0] = x_sim[:, sim_time]
+        # x_bar_compare[:, 0] = x_sim[:, sim_time]
 
         # Step 5: Rollout using dynamics to get rest of x_bar
         for t in range(1, T + 1):
@@ -76,56 +76,86 @@ for sim_time in range(sim_duration - 1):
             x_bar[:, t] = x_kp1.full().flatten()
 
             # Comparing with previous implementation
-            A, B, C = kbm.linearize_model(x_bar_t, u_bar_t)
-            x_bar_compare[:, t] = A @ x_bar_t + B @ u_bar_t + C.flatten()
+            # A, B, C = kbm.linearize_model(x_bar_t, u_bar_t)
+            # x_bar_compare[:, t] = A @ x_bar_t + B @ u_bar_t + C.flatten()
         
-        breakpoint()
+        g = []      # Constraint
+        lbg = []    # Lower bound for constraints
+        ubg = []    # Upper bound for constraints
+        J = 0       # Cost
+
+        # Initializing decision variables (X, U)
+        X = cs.MX.sym('X', N_STATES, T + 1)
+
+        # Initializing lower and upper bounds for state
+        X_lb_row = cs.DM([-cs.inf, -cs.inf, 0, -cs.inf],)
+        X_ub_row = cs.DM([cs.inf, cs.inf, MAX_SPEED, cs.inf],)
+        X_lb = cs.repmat(X_lb_row, T + 1, 1)
+        X_ub = cs.repmat(X_ub_row, T + 1, 1)
         
-        x = cp.Variable((N_STATES, T + 1))
-        u = cp.Variable((N_ACTIONS, T))
-        cost = 0
-        constr = []
+        U = cs.MX.sym('U', N_ACTIONS, T)
+        U_lb_row = cs.DM([-MAX_ACC, -MAX_STEER, -MAX_STEER])
+        U_ub_row = cs.DM([MAX_ACC, MAX_STEER, MAX_STEER])
+        U_lb = cs.repmat(U_lb_row, T, 1)
+        U_ub = cs.repmat(U_ub_row, T, 1)
+
+        # Stacking decision variables and contraints
+        vec = lambda M: cs.reshape(M, -1, 1)
+        w = cs.vertcat(vec(X), vec(U))
+        lbw = cs.vertcat(X_lb, U_lb)
+        ubw = cs.vertcat(X_ub, U_ub)
+        lbw = cs.vertcat(X_lb, U_lb)
+        lbw = cs.vertcat(X_lb, U_lb)
 
         # Cost Matrices
-        Q = np.diag([20, 20, 10, 0])  # state error cost
-        Qf = np.diag([30, 30, 30, 0])  # state  final error cost
-        R = np.diag([10, 10, 10])  # input cost
-        R_ = np.diag([10, 10, 10])  # input rate of change cost
+        Q   = cs.DM(np.diag([20, 20, 10, 1e-3]))   # state error cost
+        Qf  = cs.DM(np.diag([30, 30, 30, 1e-3]))   # state  final error cost
+        R   = cs.DM(np.diag([10, 10, 10]))      # input cost
+        R_  = cs.DM(np.diag([10, 10, 10]))      # input rate of change cost
 
         x_ref, _ = get_reference_trajectory(x_bar[:, 0], track, REF_VEL, 0.05)
         x_ref[3, :] = np.unwrap(x_ref[3, :])
+        
+        for k in range(T):
+            # Initialize action for current_timestep
+            e = X[:, k] - x_ref[:, k]
+            J += e.T @ Q @ e
+            J += U[:, k].T @ R @ U[:, k]
 
-        for t in range(T):
-            cost += cp.quad_form(x[:, t] - x_ref[:, t], Q)
-            cost += cp.quad_form(u[:, t], R)
-            if t < (T - 1):
-                cost += cp.quad_form(u[:, t+1] - u[:, t], R_)
-                constr += [
-                    cp.abs(u[0, t + 1] - u[0, t]) / DT <= MAX_D_ACC
-                ]
-                constr += [
-                    cp.abs(u[1, t + 1] - u[1, t]) / DT <= MAX_D_STEER
-                ]
-                constr += [
-                    cp.abs(u[2, t + 1] - u[2, t]) / DT <= MAX_D_STEER
-                ]
+            # Handling constraints to smooth controls
+            if k < (T - 1):
+                e_u = U[:, k+1] - U[:, k]
+                J += e_u.T @ R_ @ e_u
+                
+                d_u = e_u / DT
+                g += [d_u]
+                lbg += [-MAX_D_ACC, -MAX_D_STEER, -MAX_D_STEER]
+                ubg += [MAX_D_ACC, MAX_D_STEER, MAX_D_STEER]
+
+            x_kp1, A, B, C = cs_kbm.integrate(x_bar[:, k], u_bar[:, k])
             
-            A, B, C = kbm.linearize_model(x_bar[:, t], u_bar[:, t])
-            constr += [x[:, t + 1] == A @ x[:, t] + B @ u[:, t] + C.flatten()]
+            g += [A @ X[:, k] + B @ U[:, k] + C - X[:, k + 1]]
+            lbg += [0] * N_STATES
+            ubg += [0] * N_STATES
 
-        cost += cp.quad_form(x[:, T] - x_ref[:, T], Qf)
+        e_xn = X[:, T] - x_ref[:, T]
+        J += e_xn.T @ Qf @ e_xn
 
-        constr += [x[:, 0] == x_bar[:, 0]]
-        constr += [x[2, :] <= MAX_SPEED]
-        constr += [x[2, :] >= 0.0]
-        constr += [cp.abs(u[0, :]) <= MAX_ACC]
-        constr += [cp.abs(u[1, :]) <= MAX_STEER]
+        g += [X[:, 0] - x_bar[:, 0]]
+        lbg += [0] * N_STATES
+        ubg += [0] * N_STATES
 
-        prob = cp.Problem(cp.Minimize(cost), constr)
-        solution = prob.solve(solver=cp.OSQP, verbose=False)
-        a_mpc   = np.array(u.value[0, :]).flatten()
-        d_f_mpc = np.array(u.value[1, :]).flatten()
-        d_r_mpc = np.array(u.value[2, :]).flatten()
+        qp_opts = {'printLevel': 'none'}
+        prob    = {'x': w, 'f': J, 'g': cs.vertcat(*g)}
+        solver  = cs.qpsol('solver', 'qpoases', prob, qp_opts)
+        sol     = solver(lbx=lbw, ubx=ubw, lbg=cs.vertcat(*lbg), ubg=cs.vertcat(*ubg))
+
+        X_mpc = cs.reshape(sol['x'][:N_STATES * (T+1)], 4, T+1).full()
+        U_mpc = cs.reshape(sol['x'][N_STATES * (T+1):], 3, T).full()
+        
+        a_mpc   = np.array(U_mpc[0, :]).flatten()
+        d_f_mpc = np.array(U_mpc[1, :]).flatten()
+        d_r_mpc = np.array(U_mpc[2, :]).flatten()
         u_bar_new = np.vstack((a_mpc, d_f_mpc, d_r_mpc))
 
         delta_u = np.sum(np.sum(np.abs(u_bar_new - u_bar), axis=0), axis=0)
@@ -134,16 +164,16 @@ for sim_time in range(sim_duration - 1):
             
         u_bar = u_bar_new
     
-    current_state = x.value[:, 0]
+    current_state = X_mpc[:, 0]
     l_state.append(current_state)
-    x_mpc = np.array(x.value[0, :]).flatten()
-    y_mpc = np.array(x.value[1, :]).flatten()
-    v_mpc = np.array(x.value[2, :]).flatten()
-    theta_mpc = np.array(x.value[3, :]).flatten()
+    x_mpc       = np.array(X_mpc[0, :]).flatten()
+    y_mpc       = np.array(X_mpc[1, :]).flatten()
+    v_mpc       = np.array(X_mpc[2, :]).flatten()
+    theta_mpc   = np.array(X_mpc[3, :]).flatten()
 
-    a_mpc = np.array(u.value[0, :]).flatten()
-    df_mpc = np.array(u.value[1, :]).flatten()
-    dr_mpc = np.array(u.value[2, :]).flatten()
+    a_mpc   = np.array(U_mpc[0, :]).flatten()
+    df_mpc  = np.array(U_mpc[1, :]).flatten()
+    dr_mpc  = np.array(U_mpc[2, :]).flatten()
 
     l_a.append(a_mpc[0])
     l_df.append(df_mpc[0])
@@ -153,15 +183,18 @@ for sim_time in range(sim_duration - 1):
     
     # Take first action
     u_sim[:, sim_time] = u_bar[:, 0]
-
+    
     # Measure elpased time to get results from cvxpy
     opt_time.append(time.time() - iter_start)
 
     # move simulation to t+1
-    tspan = [0, DT]
-    x_sim[:, sim_time + 1] = kbm.forward_one_step(x_sim[:, sim_time], u_sim[:, sim_time])
+    # tspan = [0, DT]
+    x_sim[:, sim_time + 1] = cs_kbm.forward_one_step(x_sim[:, sim_time], u_sim[:, sim_time])
+    # x_sim[:, sim_time + 1] = kbm.forward_one_step(x_sim[:, sim_time], u_sim[:, sim_time])
 
-    # x_traj = kbm.forward(x0, np.vstack((a_mpc, delta_mpc)))
+print("TOTAL TIME: {}".format(np.sum(opt_time)))
+# 12.10 seconds
+# 18.933314323425293 (previous implementation)
 
 # Visualization
 fig = plt.figure(figsize=(10, 6))
