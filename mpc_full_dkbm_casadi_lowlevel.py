@@ -57,6 +57,7 @@ l_state = []
 # 1/2 x^T H x 
 # x would be the decision variables
 
+# TODO: add maximum change of controls in.
 MPC_PARAMS = {
     "n_x": N_STATES,
     "m_u": N_ACTIONS,
@@ -167,36 +168,39 @@ class MPC:
 
         x_ref, _ = get_reference_trajectory(x_bar[:, 0], track, REF_VEL, 0.05)
         x_ref[3, :] = np.unwrap(x_ref[3, :])
-
-        # Construct g (linear portion of QP)
-        # Construct A (constraints of QP)
-        # Construct a_lb, a_ub (bounds of the constraints)
-        g = 0
-        A = []
-        lba = []
-        uba = []
-        # TODO: I don't want to construct this whole mess again and again every single time.
-        # After we ensure that it works, can we make a function so we only sub in the values that change (i.e. x_bar / x_ref)?
-
-        # TODO: we need to rethink how we construct lba / uba.
-        l_u_ba_states = [0] * (N_STATES)
-        lba_action = [-MAX_D_ACC, -MAX_D_STEER, -MAX_D_STEER]
-        uba_action = [MAX_D_ACC, MAX_D_STEER, MAX_D_STEER]
         
+        ###############
+        # CONSTRAINTS #
+        ###############        
+
         # We can initialize the entire A matrix corresponding to constraints.
         # It is a sparse matrix with dimensions (4 x (N-1) TIMES (Nx7))
         # (Dimensions) cols: we have to add self.nX for the final state (X_N)
-        A_dynamics = cs.SX.zeros(self.nX * self.T, self.T*(self.nX + self.mU) + self.nX)
+        A_dynamics = cs.SX.zeros(self.nX * self.T, self.X.size1())
         a_dynamics_bounds = []
-        
-        A_controls = cs.SX.zeros()
 
+        A_controls = cs.SX.zeros(self.mU * (self.T-1) , self.X.size1())
+        A_controls_ub = []
+        A_controls_lb = []
+
+        g = []
         for k in range(T):
-            g += -2 * cs.DM(x_ref[:, k].T @ self.params['Q']).T @ self.X[:, k]
-            
+            # g += -2 * cs.DM(x_ref[:, k].T @ self.params['Q']).T @ self.X[:, k]
+            g_block = cs.vertcat(-2 * self.params['Q'] @ cs.DM(x_ref[:, k]), cs.SX.zeros(self.mU, 1))
+            g.append(g_block)
+
             if k < (T - 1):
-                d_u = (self.U[:, k+1] - self.U[:, k]) / self.dt
-                # A += [d_u]
+                A_controls_row = cs.horzcat(cs.SX.zeros(3, 4), -cs.SX.eye(3), cs.SX.zeros(3, 4), cs.SX.eye(3))
+                A_row_i_start   = self.mU * k
+                A_row_i_end     = self.mU * (k + 1)
+                A_col_i_start   = (self.nX + self.mU) * k
+                A_col_i_end     = A_col_i_start + (self.nX + self.mU) * 2
+                A_controls[A_row_i_start:A_row_i_end, A_col_i_start:A_col_i_end] = A_controls_row
+
+                # TODO: code is correct, but the parameters are wrong here. Use the change of controls part. Add into
+                # params first.
+                A_controls_lb.append(self.params["U_lb"] * self.dt)
+                A_controls_ub.append(self.params["U_ub"] * self.dt)
 
             x_kp1, A_d, B_d, C_d = cs_kbm.integrate(x_bar[:, k], u_bar[:, k])
 
@@ -204,34 +208,51 @@ class MPC:
             # col: each col has 2 blocks of (self.nX + self.mU).
             #   The first block is A B (Ax + Bu).
             #   The second block is [-I 0] (x_kp1, 0u)
+            
+            # Terminal condition: there's actually mU less for the last col offset.
+            if k == T - 1:
+                A_row = cs.horzcat(A_d, B_d, cs.SX.eye(4))
+                col_offset = self.nX * 2 + self.mU
+            else:
+                A_row = cs.horzcat(A_d, B_d, cs.SX.eye(4), cs.SX.zeros(4, 3))
+                col_offset = (self.nX + self.mU) * 2
 
-            # TODO: bug with how we deal with constraint shapes because currently we're "skipping" timesteps in 
-            # our construction of the row for A
-
-            A_row = cs.horzcat(A_d, B_d, cs.SX.eye(4), cs.SX.zeros(4, 3))
             A_row_i_start   = self.nX * k
             A_row_i_end     = self.nX * (k + 1)
             A_col_i_start   = (self.nX + self.mU) * k
-            A_col_i_end     = 2 * (self.nX + self.mU) * (k + 1)
+            A_col_i_end     = A_col_i_start + col_offset
+            
+            print("row_indices from {} to {}".format(A_row_i_start, A_row_i_end))
+            print("col_indices from {} to {}".format(A_col_i_start, A_col_i_end))
             A_dynamics[A_row_i_start:A_row_i_end, A_col_i_start:A_col_i_end] = A_row
             a_dynamics_bounds.append(C_d)
 
-        # A += [self.X[:, 0] - x_bar[:, 0]]
+        # Terminal state linear component
+        g.append(cs.vertcat(-2 * self.params['Q'] @ cs.DM(x_ref[:, T])))
+
         A_start = cs.horzcat(cs.SX.eye(4), cs.SX.zeros(4, (self.nX + self.mU) * T))
         A_start_bounds = x_bar[:, 0]
+        
+        A_controls_lb = cs.vertcat(*A_controls_lb)
+        A_controls_ub = cs.vertcat(*A_controls_ub)
+
+        # Concatenating all the constraints
+        A = cs.vertcat(A_start, A_controls, A_dynamics)
+        A_lb = cs.vertcat(*A_start_bounds, A_controls_lb, *a_dynamics_bounds)
+        A_ub = cs.vertcat(*A_start_bounds, A_controls_ub, *a_dynamics_bounds)
 
         # QP has not been initialized yet
         if not self.S:
             opts = {'printLevel': 'tabular', 'print_in':True, 'print_out':True, 'print_problem':True, 'verbose':True}
             qp = {'h': self.H.sparsity(), 'a': A.sparsity()}
             self.S = cs.conic('S', 'qpoases', qp, opts)
-        
+        breakpoint()
+
+        # TODO: we haven't set the bounds for the x's
         lbx = self.lbw
         ubx = self.ubw
         H = self.H
-        g = cs.gradient(g, self.W)
-        lba = cs.vertcat(*lba)
-        uba = cs.vertcat(*uba)
+        g = cs.vertcat(*g)
 
         r = self.S(
             lbx=self.lbw,
@@ -239,8 +260,8 @@ class MPC:
             h=self.H,
             g=g,
             a=A,
-            lba=lba,
-            uba=uba,
+            lba=A_lb,
+            uba=A_ub,
         )
 
 mpc = MPC(MPC_PARAMS, cs_kbm)
@@ -259,32 +280,6 @@ A_sym = cs.MX.sym('A', N_C, N_STATES * (T+1) + N_ACTIONS * T)
 qp_opts = {'printLevel': 'none'}
 prob    = {'h': H, 'a': A_sym.sparsity()}
 solver  = cs.conic('solver', 'qpoases', prob, qp_opts)
-
-    # # Handling constraints to smooth controls
-    # if k < (T - 1):
-    #     e_u = U[:, k+1] - U[:, k]
-    #     J += e_u.T @ R_ @ e_u
-        
-    #     d_u = e_u / DT
-    #     g += [d_u]
-    #     lbg += [-MAX_D_ACC, -MAX_D_STEER, -MAX_D_STEER]
-    #     ubg += [MAX_D_ACC, MAX_D_STEER, MAX_D_STEER]
-
-#     x_kp1, A, B, C = cs_kbm.integrate(x_bar[:, k], u_bar[:, k])
-    
-#     g += [A @ X[:, k] + B @ U[:, k] + C - X[:, k + 1]]
-#     lbg += [0] * N_STATES
-#     ubg += [0] * N_STATES
-
-# # Terminal cost
-# e_xn = X[:, T] - x_ref[:, T]
-# J += e_xn.T @ Qf @ e_xn
-
-# # Setting a constraint for initial state.
-# g += [X[:, 0] - x_bar[:, 0]]
-# lbg += [0] * N_STATES
-# ubg += [0] * N_STATES
-
 
 for sim_time in range(sim_duration - 1):
     iter_start = time.time()
