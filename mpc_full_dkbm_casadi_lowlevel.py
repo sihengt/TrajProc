@@ -57,7 +57,6 @@ l_state = []
 # 1/2 x^T H x 
 # x would be the decision variables
 
-# TODO: add maximum change of controls in.
 MPC_PARAMS = {
     "n_x": N_STATES,
     "m_u": N_ACTIONS,
@@ -67,6 +66,7 @@ MPC_PARAMS = {
     "X_ub": cs.DM([cs.inf, cs.inf, MAX_SPEED, cs.inf],),
     "U_lb": cs.DM([-MAX_ACC, -MAX_STEER, -MAX_STEER]), 
     "U_ub": cs.DM([MAX_ACC, MAX_STEER, MAX_STEER]),
+    "dU_b": cs.DM([MAX_D_ACC, MAX_D_STEER, MAX_D_STEER]),
     "Q": cs.DM(np.diag([20, 20, 10, 0])),
     "Qf": cs.DM(np.diag([30, 30, 30, 0])),
     "R": cs.DM(np.diag([10, 10, 10])),
@@ -115,6 +115,19 @@ class MPC:
         # self.W = cs.vertcat(self.vec(self.X), self.vec(self.U))
 
         # Initializes and flattens lower and upper bounds for state for each state variable in w.
+        X_lb = []
+        X_ub = []
+
+        for k in range(T):
+            X_lb.append(params['X_lb'])
+            X_lb.append(params['U_lb'])
+            X_ub.append(params['X_ub'])
+            X_ub.append(params['U_ub'])
+        X_ub.append(params['X_ub'])
+        X_lb.append(params['X_lb'])
+        self.X_ub = cs.vertcat(*X_ub)
+        self.X_lb = cs.vertcat(*X_lb)
+
         # X_lb = cs.repmat(params['X_lb'], T + 1, 1)
         # X_ub = cs.repmat(params['X_ub'], T + 1, 1)
         # U_lb = cs.repmat(params['U_lb'], T, 1)
@@ -160,7 +173,7 @@ class MPC:
 
     def predict(self, x_bar_0, u_bar, track):
         # Initial guess of state. It doesn't have to be accurate but it helps to be dynamically accurate.
-        x_bar = np.zeros((N_STATES, T+1))
+        x_bar = np.zeros((N_STATES, self.T+1))
         x_bar[:, 0] = x_bar_0
         
         # Gets x_bar based on u_bar, the warm-start for the actions.
@@ -184,23 +197,21 @@ class MPC:
         A_controls_lb = []
 
         g = []
-        for k in range(T):
+        for k in range(self.T):
             # g += -2 * cs.DM(x_ref[:, k].T @ self.params['Q']).T @ self.X[:, k]
-            g_block = cs.vertcat(-2 * self.params['Q'] @ cs.DM(x_ref[:, k]), cs.SX.zeros(self.mU, 1))
+            g_block = cs.vertcat(-2 * self.params['Q'] @ cs.DM(x_ref[:, k]), cs.DM.zeros(self.mU, 1))
             g.append(g_block)
 
-            if k < (T - 1):
+            if k < (self.T - 1):
                 A_controls_row = cs.horzcat(cs.SX.zeros(3, 4), -cs.SX.eye(3), cs.SX.zeros(3, 4), cs.SX.eye(3))
                 A_row_i_start   = self.mU * k
                 A_row_i_end     = self.mU * (k + 1)
                 A_col_i_start   = (self.nX + self.mU) * k
                 A_col_i_end     = A_col_i_start + (self.nX + self.mU) * 2
-                A_controls[A_row_i_start:A_row_i_end, A_col_i_start:A_col_i_end] = A_controls_row
 
-                # TODO: code is correct, but the parameters are wrong here. Use the change of controls part. Add into
-                # params first.
-                A_controls_lb.append(self.params["U_lb"] * self.dt)
-                A_controls_ub.append(self.params["U_ub"] * self.dt)
+                A_controls[A_row_i_start:A_row_i_end, A_col_i_start:A_col_i_end] = A_controls_row
+                A_controls_lb.append(self.params["dU_b"] * self.dt)
+                A_controls_ub.append(self.params["dU_b"] * self.dt)
 
             x_kp1, A_d, B_d, C_d = cs_kbm.integrate(x_bar[:, k], u_bar[:, k])
 
@@ -210,62 +221,61 @@ class MPC:
             #   The second block is [-I 0] (x_kp1, 0u)
             
             # Terminal condition: there's actually mU less for the last col offset.
-            if k == T - 1:
-                A_row = cs.horzcat(A_d, B_d, cs.SX.eye(4))
+            if k == self.T - 1:
+                A_row = cs.horzcat(A_d, B_d, -cs.SX.eye(4))
                 col_offset = self.nX * 2 + self.mU
             else:
-                A_row = cs.horzcat(A_d, B_d, cs.SX.eye(4), cs.SX.zeros(4, 3))
+                A_row = cs.horzcat(A_d, B_d, -cs.SX.eye(4), cs.SX.zeros(4, 3))
                 col_offset = (self.nX + self.mU) * 2
 
             A_row_i_start   = self.nX * k
             A_row_i_end     = self.nX * (k + 1)
             A_col_i_start   = (self.nX + self.mU) * k
             A_col_i_end     = A_col_i_start + col_offset
-            
-            print("row_indices from {} to {}".format(A_row_i_start, A_row_i_end))
-            print("col_indices from {} to {}".format(A_col_i_start, A_col_i_end))
+
             A_dynamics[A_row_i_start:A_row_i_end, A_col_i_start:A_col_i_end] = A_row
             a_dynamics_bounds.append(C_d)
 
         # Terminal state linear component
-        g.append(cs.vertcat(-2 * self.params['Q'] @ cs.DM(x_ref[:, T])))
+        g.append(cs.vertcat(-2 * self.params['Q'] @ cs.DM(x_ref[:, self.T])))
 
-        A_start = cs.horzcat(cs.SX.eye(4), cs.SX.zeros(4, (self.nX + self.mU) * T))
-        A_start_bounds = x_bar[:, 0]
-        
-        A_controls_lb = cs.vertcat(*A_controls_lb)
-        A_controls_ub = cs.vertcat(*A_controls_ub)
+        # Adding constraint for starting state, which has to match.
+        A_start = cs.horzcat(cs.DM.eye(4), cs.DM.zeros(4, (self.nX + self.mU) * self.T))
+        A_start_bounds = cs.DM(x_bar[:, 0])
 
         # Concatenating all the constraints
+        # A = cs.vertcat(A_controls, A_dynamics)
+        # A_lb = cs.vertcat(*A_controls_ub, *a_dynamics_bounds)
+        # A_ub = cs.vertcat(*A_controls_ub, *a_dynamics_bounds)
+
         A = cs.vertcat(A_start, A_controls, A_dynamics)
-        A_lb = cs.vertcat(*A_start_bounds, A_controls_lb, *a_dynamics_bounds)
-        A_ub = cs.vertcat(*A_start_bounds, A_controls_ub, *a_dynamics_bounds)
+        A_lb = cs.vertcat(A_start_bounds, *A_controls_lb, *a_dynamics_bounds)
+        A_ub = cs.vertcat(A_start_bounds, *A_controls_ub, *a_dynamics_bounds)
 
         # QP has not been initialized yet
         if not self.S:
-            opts = {'printLevel': 'tabular', 'print_in':True, 'print_out':True, 'print_problem':True, 'verbose':True}
+            opts = {
+                'verbose':True
+            }
             qp = {'h': self.H.sparsity(), 'a': A.sparsity()}
             self.S = cs.conic('S', 'qpoases', qp, opts)
-        breakpoint()
 
         # TODO: we haven't set the bounds for the x's
-        lbx = self.lbw
-        ubx = self.ubw
-        H = self.H
         g = cs.vertcat(*g)
+        breakpoint()
 
         r = self.S(
-            lbx=self.lbw,
-            ubx=self.ubw,
-            h=self.H,
+            lbx=self.X_lb,
+            ubx=self.X_ub,
+            h=cs.DM(self.H),
             g=g,
-            a=A,
+            a=cs.DM(A),
             lba=A_lb,
             uba=A_ub,
         )
 
 mpc = MPC(MPC_PARAMS, cs_kbm)
-mpc.predict(np.array([1, 2, 3, 4]).T, np.random.rand(3, T), track)
+mpc.predict(np.array([1, 2, 1.0, 4]).T, np.random.rand(3, T), track)
 exit()
 
 ################################
