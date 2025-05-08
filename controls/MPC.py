@@ -1,7 +1,7 @@
 import casadi as cs
 import numpy as np
-from scripts import *
-from DKBM_casadi import csDSKBM
+from ..scripts import *
+from ..DKBM_casadi import csDSKBM
 
 class MPC:
     def __init__(self, params, model):

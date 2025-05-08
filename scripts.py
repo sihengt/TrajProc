@@ -1,7 +1,6 @@
 import numpy as np
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
-from KBM import KinematicBicycleModel
 
 N_STATES = 4
 T_HORIZON = 20
