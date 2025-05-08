@@ -127,7 +127,7 @@ def get_trajectory_coeffs_body(state, track, n_lookahead):
 
 def get_reference_trajectory(state, path, target_v, track_step):
     """ 
-    Based on the target velocity, get a reference trajectory based on number of indices
+    Given a target velocity, get a reference trajectory based on number of indices
     traversed along the precomputed path.
 
     Params:
