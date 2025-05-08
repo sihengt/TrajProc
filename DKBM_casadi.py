@@ -65,6 +65,8 @@ class csDSKBM:
         self.get_A = self.init_A()
         self.get_B = self.init_B()
         self.RK4 = self.init_rk4()
+        
+        self.dae = self.initialize_dae()
 
     def init_sideslip_function(self):
         return cs.Function(
@@ -171,23 +173,24 @@ class csDSKBM:
 
         return A_lin, B_lin, C_lin
 
-    def model(self, x, t, u):
-        v       = x[2]
-        theta   = x[3]
-        a       = u[0]
-        d_f     = u[1]
-        d_r     = u[2]
+    def initialize_dae(self):
+        v       = self.X[2]
+        theta   = self.X[3]
+        a       = self.U[0]
+        d_f     = self.U[1]
+        d_r     = self.U[2]
         
-        beta    = self.calculate_sideslip(d_f, d_r)
+        beta    = self.sideslip(delta_f=d_f, delta_r=d_r)['beta']
 
         x_dot   = v * np.cos(beta + theta)
         y_dot   = v * np.sin(beta + theta)
         v_dot   = a
         theta_dot = (v * np.cos(beta)) / (self.l_f + self.l_r) * (np.tan(d_f) - np.tan(d_r))
+        F = cs.vertcat(x_dot, y_dot, v_dot, theta_dot)
+        
+        dae = {'x':self.X, 'p':self.U, 'ode':F}
 
-        dqdt = [x_dot, y_dot, v_dot, theta_dot]
-
-        return dqdt
+        return dae
     
     # TODO: re-think design for sure.
     def forward(self, x0, u):
@@ -203,6 +206,9 @@ class csDSKBM:
         return x_
     
     def forward_one_step(self, x0, u):
-        tspan = [0, self.DT]
-        x_next = odeint(self.model, x0, tspan, args=(u,))
-        return x_next[1]
+        F = cs.integrator('F', 'idas', self.dae, {'tf':self.DT})
+        r = F(x0=x0, p=u)
+        return r['xf'].full().flatten()
+        # tspan = [0, self.DT]
+        # x_next = odeint(self.model, x0, tspan, args=(u,))
+        # return x_next[1]
