@@ -1,7 +1,7 @@
 import casadi as cs
 import numpy as np
 from ..scripts import *
-from ..DKBM_casadi import csDSKBM
+from ..models.DKBM_casadi import csDSKBM
 
 class MPC:
     def __init__(self, params, model):
@@ -92,8 +92,8 @@ class MPC:
         # TODO: PARAMETERIZE!
         REF_VEL = 1.0
 
-        x_ref, _ = get_reference_trajectory(x_bar[:, 0], track, REF_VEL, 0.05)
-        x_ref[3, :] = np.unwrap(x_ref[3, :])
+        x_ref, _ = get_reference_trajectory_no_accel(x_bar[:, 0], track, REF_VEL, 0.05)
+        x_ref[2, :] = np.unwrap(x_ref[2, :])
         
         for k in range(self.T):
             # Initialize action for current_timestep
@@ -126,7 +126,7 @@ class MPC:
         lbg += [0] * self.nX
         ubg += [0] * self.nX
 
-        qp_opts = {}
+        qp_opts = {"error_on_fail": False}
         prob    = {'x': self.w, 'f': J, 'g': cs.vertcat(*g)}
         solver  = cs.qpsol('solver', 'qpoases', prob, qp_opts)
         sol     = solver(lbx=self.lbw, ubx=self.ubw, lbg=cs.vertcat(*lbg), ubg=cs.vertcat(*ubg))
@@ -134,8 +134,8 @@ class MPC:
         X_sol = sol['x']
         # Take the evenly shaped portions first.
         # Reshape so every column corresponds to a time step
-        X_mpc = cs.reshape(sol['x'][:self.nX * (self.T+1)], 4, self.T+1).full()
-        U_mpc = cs.reshape(sol['x'][self.nX * (self.T+1):], 3, self.T).full()
+        X_mpc = cs.reshape(sol['x'][:self.nX * (self.T+1)], self.nX, self.T+1).full()
+        U_mpc = cs.reshape(sol['x'][self.nX * (self.T+1):], self.mU, self.T).full()
         
         return X_mpc, U_mpc
 

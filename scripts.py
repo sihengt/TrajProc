@@ -171,6 +171,50 @@ def get_reference_trajectory(state, path, target_v, track_step):
 
     return xref, dref
 
+def get_reference_trajectory_no_accel(state, path, target_v, track_step):
+    """ 
+    Given a target velocity, get a reference trajectory based on number of indices
+    traversed along the precomputed path.
+
+    Params:
+        state: (n_states, 1): In our specific case (x, y, velocity, yaw)
+        path: (3, N) full path that contains (x, y, theta).
+        target_v: target velocity to generate reference trajectory with.
+    Returns:
+        xref: (n_states, T+1): T = horizon
+        dref: all 0's because it's to be optimized for.
+    """
+
+    xref = np.zeros((3, T_HORIZON + 1))
+    dref = np.zeros((1, T_HORIZON + 1))
+
+    path_length = path.shape[1]
+
+    nn_idx = get_nn_idx(state, path)
+
+    xref[0, 0] = path[0, nn_idx]
+    xref[1, 0] = path[1, nn_idx]
+    xref[2, 0] = path[2, nn_idx]
+    
+    # The track is formed with a step parameter dictating distance between each waypoint.
+    dl = track_step
+    travel = 0.0
+
+    for i in range(T_HORIZON + 1):
+        travel += abs(target_v) * DT
+        n_indices = int(round(travel / dl))
+
+        if (nn_idx + n_indices) < path_length:
+            xref[0, i] = path[0, nn_idx + n_indices]
+            xref[1, i] = path[1, nn_idx + n_indices]
+            xref[2, i] = path[2, nn_idx + n_indices]
+        else:
+            xref[0, i] = path[0, path_length - 1]
+            xref[1, i] = path[1, path_length - 1]
+            xref[2, i] = path[2, path_length - 1]
+
+    return xref, dref
+
 if __name__ == "__main__":
     # Horizon
     LOOKAHEAD = 6

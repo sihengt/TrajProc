@@ -135,44 +135,6 @@ class csDSKBM:
 
         return cs.Function('F', [x0_int, u_int, A, B, C], [x_accumulated], ['x0', 'u', 'A', 'B', 'C'], ['xf'])
 
-    def linearize_model(self, X_bar, U_bar):
-        x_bar       = X_bar[0]
-        y_bar       = X_bar[1]
-        v_bar       = X_bar[2]
-        theta_bar   = X_bar[3]
-        
-        a_bar       = U_bar[0]
-        d_f_bar     = U_bar[1]
-        d_r_bar     = U_bar[2] 
-
-        beta_bar    = self.calculate_sideslip(d_f_bar, d_r_bar)
-
-        A = np.zeros((4, 4))
-        A[0, 2] = np.cos(theta_bar + beta_bar)
-        A[0, 3] = -v_bar * np.sin(theta_bar + beta_bar)
-        A[1, 2] = np.sin(theta_bar + beta_bar)
-        A[1, 3] = v_bar * np.cos(theta_bar + beta_bar)
-        A[3, 2] = np.cos(beta_bar) / (self.l_f + self.l_r) * (np.tan(d_f_bar) - np.tan(d_r_bar))
-
-        A_lin = np.eye(4) + self.DT * A
-        
-        B = np.zeros((4, 3))
-        B[2, 0] = 1
-        B[3, 1] = self.d_f_d_df(v_bar, self.l_f, self.l_r, beta_bar, d_f_bar, d_r_bar)
-        B[3, 2] = self.d_f_d_dr(v_bar, self.l_f, self.l_r, beta_bar, d_f_bar, d_r_bar)
-        B_lin = self.DT * B
-
-        f_x_bar_u_bar = np.array([
-            [v_bar * np.cos(theta_bar)],
-            [v_bar * np.sin(theta_bar)],
-            [a_bar],
-            [(v_bar * np.cos(beta_bar)) / (self.l_f + self.l_r) * (np.tan(d_f_bar) - np.tan(d_r_bar))]
-        ])
-        
-        C_lin = self.DT * (f_x_bar_u_bar - A @ X_bar.reshape(4, 1) - B @ U_bar.reshape(3, 1))
-
-        return A_lin, B_lin, C_lin
-
     def initialize_dae(self):
         v       = self.X[2]
         theta   = self.X[3]
@@ -191,19 +153,6 @@ class csDSKBM:
         dae = {'x':self.X, 'p':self.U, 'ode':F}
 
         return dae
-    
-    # TODO: re-think design for sure.
-    def forward(self, x0, u):
-        x_ = np.zeros((self.n_states, self.T + 1))
-        x_[:, 0] = x0
-
-        for t in range(1, self.T + 1):
-            tspan = [0, self.DT]
-            x_next = odeint(self.model, x0, tspan, args=(u[:, t-1],))
-            x0 = x_next[1]
-            x_[:, t] = x_next[1]
-        
-        return x_
     
     def forward_one_step(self, x0, u):
         F = cs.integrator('F', 'idas', self.dae, {'tf':self.DT})
