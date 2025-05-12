@@ -92,7 +92,7 @@ class MPC:
         # TODO: PARAMETERIZE!
         REF_VEL = 1.0
 
-        x_ref, _ = get_reference_trajectory_no_accel(x_bar[:, 0], track, REF_VEL, 0.05)
+        x_ref, _ = get_reference_trajectory_no_accel(x_bar[:, 0], track, REF_VEL, 0.05, self.T, self.dt)
         x_ref[2, :] = np.unwrap(x_ref[2, :])
         
         for k in range(self.T):
@@ -106,7 +106,7 @@ class MPC:
                 e_u = self.U[:, k+1] - self.U[:, k]
                 J += e_u.T @ self.params['R_'] @ e_u
 
-                d_u = e_u / DT
+                d_u = e_u / self.dt
                 g += [d_u]
                 lbg.append(-1 * self.params['dU_b'])
                 ubg.append(self.params['dU_b'])
@@ -137,7 +137,8 @@ class MPC:
         X_mpc = cs.reshape(sol['x'][:self.nX * (self.T+1)], self.nX, self.T+1).full()
         U_mpc = cs.reshape(sol['x'][self.nX * (self.T+1):], self.mU, self.T).full()
         
-        return X_mpc, U_mpc
+        # TODO: this was for debugging only but will break everything else.
+        return X_mpc, U_mpc, x_ref
 
     def build_g(self, x_ref):
         g = []

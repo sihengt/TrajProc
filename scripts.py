@@ -2,10 +2,6 @@ import numpy as np
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 
-N_STATES = 4
-T_HORIZON = 20
-DT = 0.2
-
 def generate_path_from_wp(wp_xs, wp_ys, step=0.1):
     """
     Params:
@@ -124,7 +120,7 @@ def get_trajectory_coeffs_body(state, track, n_lookahead):
             cov=False,)
         return coeff, offset_b
 
-def get_reference_trajectory(state, path, target_v, track_step):
+def get_reference_trajectory(state, path, target_v, track_step, T, dt):
     """ 
     Given a target velocity, get a reference trajectory based on number of indices
     traversed along the precomputed path.
@@ -138,8 +134,8 @@ def get_reference_trajectory(state, path, target_v, track_step):
         dref: all 0's because it's to be optimized for.
     """
 
-    xref = np.zeros((N_STATES, T_HORIZON + 1))
-    dref = np.zeros((1, T_HORIZON + 1))
+    xref = np.zeros((state.shape[0], T + 1))
+    dref = np.zeros((1, T + 1))
 
     path_length = path.shape[1]
 
@@ -148,45 +144,47 @@ def get_reference_trajectory(state, path, target_v, track_step):
     xref[0, 0] = path[0, nn_idx]
     xref[1, 0] = path[1, nn_idx]
     xref[2, 0] = target_v
-    xref[3, 0] = path[2, nn_idx]
+    xref[2, 0] = path[2, nn_idx]
     
     # The track is formed with a step parameter dictating distance between each waypoint.
     dl = track_step
     travel = 0.0
 
-    for i in range(T_HORIZON + 1):
-        travel += abs(target_v) * DT
+    for i in range(T + 1):
+        travel += abs(target_v) * dt
         n_indices = int(round(travel / dl))
 
         if (nn_idx + n_indices) < path_length:
             xref[0, i] = path[0, nn_idx + n_indices]
             xref[1, i] = path[1, nn_idx + n_indices]
             xref[2, i] = target_v
-            xref[3, i] = path[2, nn_idx + n_indices]
+            xref[2, i] = path[2, nn_idx + n_indices]
         else:
             xref[0, i] = path[0, path_length - 1]
             xref[1, i] = path[1, path_length - 1]
             xref[2, i] = 0.0
-            xref[3, i] = path[2, path_length - 1]
+            xref[2, i] = path[2, path_length - 1]
 
     return xref, dref
 
-def get_reference_trajectory_no_accel(state, path, target_v, track_step):
+def get_reference_trajectory_no_accel(state, path, target_v, track_step, T, dt):
     """ 
     Given a target velocity, get a reference trajectory based on number of indices
     traversed along the precomputed path.
 
     Params:
-        state: (n_states, 1): In our specific case (x, y, velocity, yaw)
+        state: (n_states, 1): In our specific case (x, y, velocity, yaw) OR (x, y, yaw)
         path: (3, N) full path that contains (x, y, theta).
         target_v: target velocity to generate reference trajectory with.
+        track_step: distance between subsequent points on the reference track.
+        T: time horizon of MPC (also number of points we need to collect from the track for reference)
+        dt: timestep used in MPC
     Returns:
         xref: (n_states, T+1): T = horizon
         dref: all 0's because it's to be optimized for.
     """
-
-    xref = np.zeros((3, T_HORIZON + 1))
-    dref = np.zeros((1, T_HORIZON + 1))
+    xref = np.zeros((3, T + 1))
+    dref = np.zeros((1, T + 1))
 
     path_length = path.shape[1]
 
@@ -200,8 +198,8 @@ def get_reference_trajectory_no_accel(state, path, target_v, track_step):
     dl = track_step
     travel = 0.0
 
-    for i in range(T_HORIZON + 1):
-        travel += abs(target_v) * DT
+    for i in range(T + 1):
+        travel += abs(target_v) * dt
         n_indices = int(round(travel / dl))
 
         if (nn_idx + n_indices) < path_length:
