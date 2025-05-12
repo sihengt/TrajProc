@@ -20,23 +20,23 @@ R   = cs.diag(cs.DM([10, 10, 10]))      # input cost
 R_  = cs.diag(cs.DM([10, 10, 10]))      # input rate of change cost
 
 # Defining symbols for state
-x = cs.MX.sym('x')
-y = cs.MX.sym('y')
-v = cs.MX.sym('v')
-theta = cs.MX.sym('theta')
+x = cs.SX.sym('x')
+y = cs.SX.sym('y')
+v = cs.SX.sym('v')
+theta = cs.SX.sym('theta')
 X = cs.vertcat(x, y, v, theta)
 
 # Defining symbols for reference state
-x_ref = cs.MX.sym('x_ref')
-y_ref = cs.MX.sym('y_ref')
-v_ref = cs.MX.sym('v_ref')
-theta_ref = cs.MX.sym('theta_ref')
+x_ref = cs.SX.sym('x_ref')
+y_ref = cs.SX.sym('y_ref')
+v_ref = cs.SX.sym('v_ref')
+theta_ref = cs.SX.sym('theta_ref')
 X_ref = cs.vertcat(x_ref, y_ref, v_ref, theta_ref)
 
 # Defining symbols for controls
-a = cs.MX.sym('a')
-delta_f = cs.MX.sym('df')
-delta_r = cs.MX.sym('dr')
+a = cs.SX.sym('a')
+delta_f = cs.SX.sym('df')
+delta_r = cs.SX.sym('dr')
 U = cs.vertcat(a, delta_f, delta_r)
 
 ######################
@@ -58,6 +58,8 @@ y_dot = v * cs.sin(beta['beta'] + theta)
 v_dot = a
 theta_dot = (v * cs.cos(beta['beta'])) / (L_F + L_R) * (cs.tan(delta_f) - cs.tan(delta_r))
 X_dot = cs.vertcat(x_dot, y_dot, v_dot, theta_dot)
+
+breakpoint()
 
 # Right now our loss is calculated as difference between the current trajectory and the reference trajectory.
 # If we want to do this in the dynamics model, we'll have to put the reference trajectory in as well.

@@ -138,9 +138,11 @@ for sim_time in range(sim_duration - 1):
             lbg += [0] * N_STATES
             ubg += [0] * N_STATES
 
+        # Terminal cost
         e_xn = X[:, T] - x_ref[:, T]
         J += e_xn.T @ Qf @ e_xn
 
+        # Setting a constraint for initial state.
         g += [X[:, 0] - x_bar[:, 0]]
         lbg += [0] * N_STATES
         ubg += [0] * N_STATES
