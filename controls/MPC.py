@@ -1,7 +1,6 @@
 import casadi as cs
 import numpy as np
 from ..scripts import *
-from ..models.DSKBM import csDSKBM
 
 class MPC:
     def __init__(self, params, model):
@@ -137,6 +136,8 @@ class MPC:
         return X_mpc, U_mpc, x_ref
 
 if __name__ == "__main__":
+    from ..models.DSKBM import csDSKBM
+    
     N_STATES = 4
     N_ACTIONS = 3
     L = 0.3
