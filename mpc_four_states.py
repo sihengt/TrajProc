@@ -1,4 +1,4 @@
-from models.DKBM_casadi import csDSKBM
+from models.DSKBM import csDSKBM
 from scripts import *
 from controls.MPC import MPC
 
