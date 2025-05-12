@@ -144,12 +144,13 @@ def get_reference_trajectory(state, path, target_v, track_step, T, dt):
     xref[0, 0] = path[0, nn_idx]
     xref[1, 0] = path[1, nn_idx]
     xref[2, 0] = target_v
-    xref[2, 0] = path[2, nn_idx]
+    xref[3, 0] = path[2, nn_idx]
     
     # The track is formed with a step parameter dictating distance between each waypoint.
     dl = track_step
     travel = 0.0
 
+    # Populate reference trajectory. Since reference trajectory
     for i in range(T + 1):
         travel += abs(target_v) * dt
         n_indices = int(round(travel / dl))
@@ -158,12 +159,14 @@ def get_reference_trajectory(state, path, target_v, track_step, T, dt):
             xref[0, i] = path[0, nn_idx + n_indices]
             xref[1, i] = path[1, nn_idx + n_indices]
             xref[2, i] = target_v
-            xref[2, i] = path[2, nn_idx + n_indices]
+            xref[3, i] = path[2, nn_idx + n_indices]
         else:
             xref[0, i] = path[0, path_length - 1]
             xref[1, i] = path[1, path_length - 1]
             xref[2, i] = 0.0
-            xref[2, i] = path[2, path_length - 1]
+            xref[3, i] = path[2, path_length - 1]
+
+    xref[3, :] = np.unwrap(xref[3, :])
 
     return xref, dref
 

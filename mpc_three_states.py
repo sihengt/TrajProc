@@ -1,36 +1,36 @@
-from DKBM import DSKinematicBicycleModel
-from DKBM_casadi import csDSKBM
-from scripts import *
+from models.vDSKBM import vDSKBM
 from controls.MPC import MPC
+from scripts import *
 
 import numpy as np
-import cvxpy as cp
+import casadi as cs
 import matplotlib.pyplot as plt
 import time
-import casadi as cs
- 
-N_STATES = 4
+
+# CONSTANTS 
+N_STATES = 3
 N_ACTIONS = 3
 L = 0.3
 l_f = 0.1
 l_r = 0.2
 T = 10          # MPC horizon
-N = 50          # Control Interval
 DT = 0.2        # dt = T/N
+DL = 0.05       # Distance between each successive point within the track.
 
 MAX_SPEED = 1.5
 MAX_STEER = np.radians(30)
-MAX_D_ACC = 1.0
+MAX_D_VEL = 1.0
 MAX_D_STEER = np.radians(30)  # rad/s
-MAX_ACC = 1.0
+MAX_VEL = 1.0
 REF_VEL = 1.0
 
-cs_kbm = csDSKBM(N_STATES, N_ACTIONS, L, l_f, l_r, T, N)
-kbm = DSKinematicBicycleModel(N_STATES, N_ACTIONS, L, l_f, l_r, T, DT)
+cs_kbm = vDSKBM(L, l_f, l_r, T, DT)
 
 # Step 1: Create a sample track
 track = generate_path_from_wp(
-    [0, 3, 4, 6, 10, 12, 14, 6, 1, 0], [0, 0, 2, 4, 3, 3, -2, -6, -2, -2], 0.05
+    [0, 3, 4, 6, 10, 12, 14, 6, 1, 0],
+    [0, 0, 2, 4, 3, 3, -2, -6, -2, -2],
+    DL
 )
 
 sim_duration = 200  # time steps
@@ -41,11 +41,11 @@ x_sim = np.zeros((N_STATES, sim_duration))
 u_sim = np.zeros((N_ACTIONS, sim_duration - 1))
 
 # Step 2: Create starting conditions x0
-x_sim[:, 0] = np.array([0.0, -0.25, 0.0, np.radians(0)]).T
+x_sim[:, 0] = np.array([0.0, -0.25, np.radians(0)]).T
 
 # Step 3: Generate starting guess for u_bar (does not have to be too accurate I suppose.)
 u_bar_start = np.zeros((N_ACTIONS, T))
-u_bar_start[0, :] = MAX_ACC / 2
+u_bar_start[0, :] = MAX_VEL / 2
 u_bar_start[1, :] = 0.0
 u_bar_start[2, :] = 0.0
 
@@ -61,9 +61,9 @@ MPC_PARAMS = {
     "dt": 0.2,
     "X_lb": cs.DM([-cs.inf, -cs.inf, 0, -cs.inf],),
     "X_ub": cs.DM([cs.inf, cs.inf, MAX_SPEED, cs.inf],),
-    "U_lb": cs.DM([-MAX_ACC, -MAX_STEER, -MAX_STEER]), 
-    "U_ub": cs.DM([MAX_ACC, MAX_STEER, MAX_STEER]),
-    "dU_b": cs.DM([MAX_D_ACC, MAX_D_STEER, MAX_D_STEER]),
+    "U_lb": cs.DM([-MAX_VEL, -MAX_STEER, -MAX_STEER]), 
+    "U_ub": cs.DM([MAX_VEL, MAX_STEER, MAX_STEER]),
+    "dU_b": cs.DM([MAX_D_VEL, MAX_D_STEER, MAX_D_STEER]),
     "Q": cs.DM(np.diag([20, 20, 10, 0])),
     "Qf": cs.DM(np.diag([30, 30, 30, 0])),
     "R": cs.DM(np.diag([10, 10, 10])),

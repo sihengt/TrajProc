@@ -1,7 +1,7 @@
 import casadi as cs
 import numpy as np
 from ..scripts import *
-from ..models.DKBM_casadi import csDSKBM
+from ..models.DSKBM import csDSKBM
 
 class MPC:
     def __init__(self, params, model):
@@ -24,11 +24,6 @@ class MPC:
         self.mU = params['m_u']
         self.T = params['T']
         self.dt = params['dt']
-        
-        # Pack the decision variables in the following order:
-        # [x_1; u_1; x_2; u_2; ... x_{T+1}]
-        # Note the absence of the last control.
-        # self.X = cs.MX.sym('W', self.nX * (self.T+1) + self.mU * self.T, 1)
         
         # Initializes and flattens lower and upper bounds for state for each state variable in w.
         self.X = cs.MX.sym('X', self.nX, self.T + 1)
@@ -66,14 +61,20 @@ class MPC:
         
         return x_bar
 
-    def predict(self, x_bar_0, u_bar, track):
+    def predict(self, x_bar_0, u_bar, ref_vel, track):
         """
         Solves MPC problem over a reference track.
 
         Params:
-            x_bar_0
+            x_bar_0: current position of robot = first position of next robot
             u_bar: warm-start for actions
+            ref_vel: velocity to generate reference waypoints at.
             track: numpy array representing track (x, y, theta)
+
+        Returns:
+            X_mpc: optimized states
+            U_mpc: optimized actions
+            x_ref: reference trajectory used to get optimized states / actions.
         """
         
         # Initialization for solving MPC problem.
@@ -89,11 +90,7 @@ class MPC:
         # Gets x_bar based on u_bar (warm-start for actions).
         self.rollout(x_bar, u_bar)
 
-        # TODO: PARAMETERIZE!
-        REF_VEL = 1.0
-
-        x_ref, _ = get_reference_trajectory_no_accel(x_bar[:, 0], track, REF_VEL, 0.05, self.T, self.dt)
-        x_ref[2, :] = np.unwrap(x_ref[2, :])
+        x_ref, _ = get_reference_trajectory(x_bar[:, 0], track, ref_vel, 0.05, self.T, self.dt)
         
         for k in range(self.T):
             # Initialize action for current_timestep
@@ -137,17 +134,7 @@ class MPC:
         X_mpc = cs.reshape(sol['x'][:self.nX * (self.T+1)], self.nX, self.T+1).full()
         U_mpc = cs.reshape(sol['x'][self.nX * (self.T+1):], self.mU, self.T).full()
         
-        # TODO: this was for debugging only but will break everything else.
         return X_mpc, U_mpc, x_ref
-
-    def build_g(self, x_ref):
-        g = []
-        for k in range(self.T):
-            g_block = cs.vertcat(-2*self.params['Q'] @ cs.DM(x_ref[:,k]),
-                                cs.DM.zeros(self.mU,1))
-            g.append(g_block)
-        g.append(cs.vertcat(-2*self.params['Qf'] @ cs.DM(x_ref[:,self.T])))
-        return cs.vertcat(*g)
 
 if __name__ == "__main__":
     N_STATES = 4

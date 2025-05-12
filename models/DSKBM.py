@@ -1,9 +1,6 @@
 import numpy as np
-from scipy.integrate import odeint
-import sympy as sp
 import casadi as cs
 
-# Double Steer Kinematic Bicycle Model
 class csDSKBM:
     """
     Double Steer Kinematic Bicycle Model assumes:
@@ -12,20 +9,20 @@ class csDSKBM:
         3. Tracks position and velocity of CG.
     """
 
-    """
-    Constructor
-
-    Params:
-        n_states: 
-        n_actions: 
-        L: 
-        l_f: 
-        l_r: 
-        T: 
-        N: 
-        M: 
-    """
     def __init__(self, n_states, n_actions, L, l_f, l_r, T, N):
+        """
+        Constructor
+
+        Params:
+            n_states: 
+            n_actions: 
+            L: 
+            l_f: 
+            l_r: 
+            T: 
+            N: 
+            M: 
+        """
         self.x = np.zeros((n_states, 1))
         self.u = np.zeros((n_actions, T))
         self.L = L          # Wheelbase
