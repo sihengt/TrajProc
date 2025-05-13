@@ -10,12 +10,11 @@ import casadi as cs
  
 N_STATES = 4
 N_ACTIONS = 3
-L = 0.3
-l_f = 0.1
-l_r = 0.2
+L = 0.684
+l_f = 0.342
+l_r = 0.342
 T = 10          # MPC horizon
-N = 50          # Control Interval
-DT = 0.2        # dt = T/N
+DT = 0.1        # dt = T/N
 
 MAX_SPEED = 1.5
 MAX_STEER = np.radians(30)
