@@ -9,7 +9,7 @@ class csDSKBM:
         3. Tracks position and velocity of CG.
     """
 
-    def __init__(self, n_states, n_actions, L, l_f, l_r, T, N):
+    def __init__(self, L, l_f, l_r, T, dt):
         """
         Constructor
 
@@ -23,14 +23,15 @@ class csDSKBM:
             N: 
             M: 
         """
-        self.x = np.zeros((n_states, 1))
-        self.u = np.zeros((n_actions, T))
+        self.nX = 4
+        self.mU = 3
+        self.x = np.zeros((self.nX, 1))
+        self.u = np.zeros((self.mU, T))
         self.L = L          # Wheelbase
         self.l_f = l_f      # Front wheel
         self.l_r = l_r      # Rear wheel
         self.T = T          # Time horizon
-        self.N = N          # Control intervals
-        self.DT = T/N     # dt
+        self.dt = dt     # dt
 
         # ---- CasADi expressions --- #
         # State
@@ -104,9 +105,9 @@ class csDSKBM:
         A_exp_3 = A_exp_2 @ A
         A_exp_4 = A_exp_3 @ A
 
-        A_d = cs.DM(np.eye(4)) + (self.DT * A) + (self.DT**2 / 2 * A_exp_2) + (self.DT**3/6 * A_exp_3) + (self.DT**4/24 * A_exp_4)
-        B_d = self.DT * B + (self.DT**2/2 * A @ B) + (self.DT**3/6 * A_exp_2 @ B) + (self.DT**4/24 * A_exp_3 @ B)
-        C_d = self.DT * g + self.DT**2/2 * A @ g + self.DT**3/6 * A_exp_2 @ g + self.DT**4/24 * A_exp_3 @ g     
+        A_d = cs.DM(np.eye(4)) + (self.dt * A) + (self.dt**2 / 2 * A_exp_2) + (self.dt**3/6 * A_exp_3) + (self.dt**4/24 * A_exp_4)
+        B_d = self.dt * B + (self.dt**2/2 * A @ B) + (self.dt**3/6 * A_exp_2 @ B) + (self.dt**4/24 * A_exp_3 @ B)
+        C_d = self.dt * g + self.dt**2/2 * A @ g + self.dt**3/6 * A_exp_2 @ g + self.dt**4/24 * A_exp_3 @ g     
         
         # x_kp1_compare = A_d @ X_bar + B_d @ U_bar + C_d
         # assert(x_kp1 == x_kp1_compare)
@@ -125,10 +126,10 @@ class csDSKBM:
 
         # for j in range(self.M):
         k1 = A @ x_accumulated + B @ u_int + C
-        k2 = A @ (x_accumulated + self.DT/2 * k1) + B @ u_int + C
-        k3 = A @ (x_accumulated + self.DT/2 * k2) + B @ u_int + C
-        k4 = A @ (x_accumulated + self.DT * k3) + B @ u_int + C
-        x_accumulated += self.DT/6 * (k1 + 2*k2 + 2*k3 + k4)
+        k2 = A @ (x_accumulated + self.dt/2 * k1) + B @ u_int + C
+        k3 = A @ (x_accumulated + self.dt/2 * k2) + B @ u_int + C
+        k4 = A @ (x_accumulated + self.dt * k3) + B @ u_int + C
+        x_accumulated += self.dt/6 * (k1 + 2*k2 + 2*k3 + k4)
 
         return cs.Function('F', [x0_int, u_int, A, B, C], [x_accumulated], ['x0', 'u', 'A', 'B', 'C'], ['xf'])
 
@@ -152,9 +153,14 @@ class csDSKBM:
         return dae
     
     def forward_one_step(self, x0, u):
-        F = cs.integrator('F', 'idas', self.dae, {'tf':self.DT})
+        """
+        Integrates the DAE by one timestep specified by self.dt.
+        
+        Params:
+            x0: state to integrate for
+            u: control input
+        """
+        F = cs.integrator('F', 'idas', self.dae, {'tf':self.dt})
         r = F(x0=x0, p=u)
         return r['xf'].full().flatten()
-        # tspan = [0, self.DT]
-        # x_next = odeint(self.model, x0, tspan, args=(u,))
-        # return x_next[1]
+

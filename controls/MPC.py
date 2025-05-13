@@ -85,7 +85,7 @@ class MPC:
         # Initial guess of state. It doesn't have to be accurate but it helps to be dynamically accurate.
         x_bar = np.zeros((self.nX, self.T+1))
         x_bar[:, 0] = x_bar_0
-        
+
         # Gets x_bar based on u_bar (warm-start for actions).
         self.rollout(x_bar, u_bar)
 
@@ -122,7 +122,7 @@ class MPC:
         lbg += [0] * self.nX
         ubg += [0] * self.nX
 
-        qp_opts = {"error_on_fail": False}
+        qp_opts = {"error_on_fail": True}
         prob    = {'x': self.w, 'f': J, 'g': cs.vertcat(*g)}
         solver  = cs.qpsol('solver', 'qpoases', prob, qp_opts)
         sol     = solver(lbx=self.lbw, ubx=self.ubw, lbg=cs.vertcat(*lbg), ubg=cs.vertcat(*ubg))
