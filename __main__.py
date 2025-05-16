@@ -1,13 +1,23 @@
 from .models.DSKBM import csDSKBM
 from .scripts import *
 from .controls.MPC import MPC
+from .TrajProc import TrajProc
 
 import numpy as np
-import cvxpy as cp
 import matplotlib.pyplot as plt
 import time
 import casadi as cs
  
+import logging
+
+# Create and configure logger
+logging.basicConfig(
+    filename="logs/example_state.log",
+    format='%(asctime)s %(message)s',
+    filemode='w',
+    level=logging.INFO)
+state_logger = logging.getLogger('States')
+
 def main():
     N_STATES = 4
     N_ACTIONS = 3
@@ -25,6 +35,7 @@ def main():
     REF_VEL = 1.0
 
     cs_kbm = csDSKBM(L, l_f, l_r, T, DT)
+    tp = TrajProc()
 
     # Step 1: Create a sample track
     xs = np.array([0, 125, 125, -125, -180, -75, 0]) * 0.05
@@ -83,7 +94,8 @@ def main():
             if i_iter == 0:
                 u_bar = u_bar_start
             
-            X_mpc, U_mpc, _ = mpc.predict(x_sim[:, sim_time], u_bar, REF_VEL, track)
+            x_ref, nn_idx = tp.get_reference_trajectory(x_sim[:, sim_time], track, REF_VEL, 0.05, T, DT)
+            X_mpc, U_mpc, _ = mpc.predict(x_sim[:, sim_time], x_ref, u_bar)
             
             a_mpc   = np.array(U_mpc[0, :]).flatten()
             d_f_mpc = np.array(U_mpc[1, :]).flatten()
@@ -115,6 +127,7 @@ def main():
         
         # Take first action
         u_sim[:, sim_time] = u_bar[:, 0]
+        print("IntAcc: {}\t Vel: {}".format(v_mpc[0] + u_bar[0, 0] * DT, v_mpc[1]))
         
         # Measure elpased time to get results from cvxpy
         opt_time.append(time.time() - iter_start)
@@ -122,6 +135,7 @@ def main():
         # move simulation to t+1
         # tspan = [0, DT]
         x_sim[:, sim_time + 1] = cs_kbm.forward_one_step(x_sim[:, sim_time], u_sim[:, sim_time])
+        state_logger.info(x_sim[:, sim_time + 1])
         # x_sim[:, sim_time + 1] = kbm.forward_one_step(x_sim[:, sim_time], u_sim[:, sim_time])
 
     print("TOTAL TIME: {}".format(np.sum(opt_time)))

@@ -7,7 +7,7 @@ import cvxpy as cp
 import matplotlib.pyplot as plt
 import time
 import casadi as cs
- 
+
 N_STATES = 4
 N_ACTIONS = 3
 L = 0.684

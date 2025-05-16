@@ -1,6 +1,5 @@
 import casadi as cs
 import numpy as np
-from ..scripts import *
 
 class MPC:
     def __init__(self, params, model):
@@ -60,15 +59,16 @@ class MPC:
         
         return x_bar
 
-    def predict(self, x_bar_0, u_bar, ref_vel, track):
+    def predict(self, x_bar_0, x_ref, u_bar):
         """
         Solves MPC problem over a reference track.
 
         Params:
             x_bar_0: current position of robot = first position of next robot
+            x_ref: reference x positions for MPC
             u_bar: warm-start for actions
-            ref_vel: velocity to generate reference waypoints at.
-            track: numpy array representing track (x, y, theta)
+            
+            
 
         Returns:
             X_mpc: optimized states
@@ -88,8 +88,6 @@ class MPC:
 
         # Gets x_bar based on u_bar (warm-start for actions).
         self.rollout(x_bar, u_bar)
-
-        x_ref, _ = get_reference_trajectory(x_bar[:, 0], track, ref_vel, 0.05, self.T, self.dt)
         
         for k in range(self.T):
             # Initialize action for current_timestep
@@ -122,7 +120,7 @@ class MPC:
         lbg += [0] * self.nX
         ubg += [0] * self.nX
 
-        qp_opts = {"error_on_fail": True}
+        qp_opts = {"error_on_fail": True, "print_problem": False, "verbose":False, "printLevel": "none"}
         prob    = {'x': self.w, 'f': J, 'g': cs.vertcat(*g)}
         solver  = cs.qpsol('solver', 'qpoases', prob, qp_opts)
         sol     = solver(lbx=self.lbw, ubx=self.ubw, lbg=cs.vertcat(*lbg), ubg=cs.vertcat(*ubg))
@@ -137,6 +135,7 @@ class MPC:
 
 if __name__ == "__main__":
     from ..models.DSKBM import csDSKBM
+    from ..TrajProc import TrajProc
     
     N_STATES = 4
     N_ACTIONS = 3
@@ -170,10 +169,12 @@ if __name__ == "__main__":
         "R_": cs.DM(np.diag([10, 10, 10]))
     }
 
-    track = generate_path_from_wp(
+    tp = TrajProc()
+
+    track = tp.generate_path_from_wp(
     [0, 3, 4, 6, 10, 12, 14, 6, 1, 0], [0, 0, 2, 4, 3, 3, -2, -6, -2, -2], 0.05
     )
 
-    cs_kbm = csDSKBM(N_STATES, N_ACTIONS, L, l_f, l_r, T, N)
-    mpc = MPC(MPC_PARAMS, cs_kbm)
-    mpc.predict(np.array([1, 2, 1.0, 4]).T, np.random.rand(3, T), track)
+    cs_kbm = csDSKBM(L, l_f, l_r, T, N)
+    mpc = MPC(MPC_PARAMS, cs_kbm, tp)
+    mpc.predict(np.array([1, 2, 0.8, np.radians(10)]).T, np.random.rand(3, T), REF_VEL, track)

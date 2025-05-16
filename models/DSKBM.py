@@ -142,10 +142,10 @@ class csDSKBM:
         
         beta    = self.sideslip(delta_f=d_f, delta_r=d_r)['beta']
 
-        x_dot   = v * np.cos(beta + theta)
-        y_dot   = v * np.sin(beta + theta)
+        x_dot   = v * cs.cos(beta + theta)
+        y_dot   = v * cs.sin(beta + theta)
         v_dot   = a
-        theta_dot = (v * np.cos(beta)) / (self.l_f + self.l_r) * (np.tan(d_f) - np.tan(d_r))
+        theta_dot = (v * cs.cos(beta)) / (self.l_f + self.l_r) * (cs.tan(d_f) - cs.tan(d_r))
         F = cs.vertcat(x_dot, y_dot, v_dot, theta_dot)
         
         dae = {'x':self.X, 'p':self.U, 'ode':F}
