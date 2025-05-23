@@ -151,6 +151,7 @@ class TrajProc:
         path_length = path.shape[1]
 
         nn_idx = self.get_nn_idx(state, path)
+        ref_traj_idx = [nn_idx]
         
         # Updates TrajProc memory so we do not accidentally backtrack or skip forward too much.
         self.lastIndex = nn_idx
@@ -173,15 +174,17 @@ class TrajProc:
                 xref[1, i] = path[1, nn_idx + n_indices]
                 xref[2, i] = target_v
                 xref[3, i] = path[2, nn_idx + n_indices]
+                ref_traj_idx.append(nn_idx + n_indices)
             else:
                 xref[0, i] = path[0, path_length - 1]
                 xref[1, i] = path[1, path_length - 1]
                 xref[2, i] = 0.0
                 xref[3, i] = path[2, path_length - 1]
+                ref_traj_idx.append(path_length - 1)
 
         xref[3, :] = np.unwrap(xref[3, :])
 
-        return xref, nn_idx
+        return xref, nn_idx, ref_traj_idx
 
     def get_reference_trajectory_no_accel(self, state, path, target_v, track_step, T, dt):
         """ 

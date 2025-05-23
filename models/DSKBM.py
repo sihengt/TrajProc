@@ -9,7 +9,7 @@ class csDSKBM:
         3. Tracks position and velocity of CG.
     """
 
-    def __init__(self, L, l_f, l_r, T, dt):
+    def __init__(self, mpc_params):
         """
         Constructor
 
@@ -22,16 +22,17 @@ class csDSKBM:
             T: 
             N: 
             M: 
-        """
+        """        
         self.nX = 4
         self.mU = 3
-        self.x = np.zeros((self.nX, 1))
-        self.u = np.zeros((self.mU, T))
-        self.L = L          # Wheelbase
-        self.l_f = l_f      # Front wheel
-        self.l_r = l_r      # Rear wheel
-        self.T = T          # Time horizon
-        self.dt = dt     # dt
+        model_params = mpc_params['model']
+        assert model_params['nStates']  == self.nX
+        assert model_params['nActions'] == self.mU
+        self.L      = model_params['L']     # Wheelbase
+        self.l_f    = model_params['l_f']   # Front wheel
+        self.l_r    = model_params['l_r']   # Rear wheel
+        self.T      = mpc_params['T']       # Time horizon
+        self.dt     = mpc_params['dt']      # dt
 
         # ---- CasADi expressions --- #
         # State

@@ -2,7 +2,7 @@ import casadi as cs
 import numpy as np
 
 class MPC:
-    def __init__(self, params, model):
+    def __init__(self, mpc_params, model):
         """
         Params:
             model: contains functions for integrate
@@ -16,23 +16,23 @@ class MPC:
                 7. u_lb[list]   (lower bounds of control)
                 8. u_ub[list]   (upper bounds of control)
         """
-        self.model = model # model.integrate / model.forward_one_step
-        self.params = params
-        self.nX = params['n_x']
-        self.mU = params['m_u']
-        self.T = params['T']
-        self.dt = params['dt']
+        self.model  = model # model.integrate / model.forward_one_step
+        self.params = mpc_params
+        self.nX     = mpc_params['model']['nStates']
+        self.mU     = mpc_params['model']['nActions']
+        self.T      = mpc_params['T']
+        self.dt     = mpc_params['dt']
         
         # Initializes and flattens lower and upper bounds for state for each state variable in w.
         self.X = cs.MX.sym('X', self.nX, self.T + 1)
-        X_lb_row = params['X_lb']
-        X_ub_row = params['X_ub']
+        X_lb_row = mpc_params['X_lb']
+        X_ub_row = mpc_params['X_ub']
         X_lb = cs.repmat(X_lb_row, self.T + 1, 1)
         X_ub = cs.repmat(X_ub_row, self.T + 1, 1)
 
         self.U = cs.MX.sym('U', self.mU, self.T)
-        U_lb_row = params['U_lb']
-        U_ub_row = params['U_ub']
+        U_lb_row = mpc_params['U_lb']
+        U_ub_row = mpc_params['U_ub']
         U_lb = cs.repmat(U_lb_row, self.T, 1)
         U_ub = cs.repmat(U_ub_row, self.T, 1)
 
