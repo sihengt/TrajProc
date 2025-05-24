@@ -86,52 +86,6 @@ class TrajProc:
     
         return nn_idx
 
-
-    # def get_nn_idx(self, state, path):
-    #     """
-    #     Params:
-    #         state: (x, y, yaw)
-    #         path: (2, N)
-    #     """
-    #     # cartesian state
-    #     c_state = state[:2]
-    #     c_path = path[:2]
-
-    #     total_path_indices = path.shape[1]
-        
-    #     # We only want to consider indices that are certain percentage ahead and certain percentage behind to avoid
-    #     # skipping the path too much.
-    #     # TODO: parameterize these values
-    #     end_idx = min(self.lastIndex + int(0.05 * total_path_indices), total_path_indices - 1)
-    #     start_idx = self.lastIndex
-    #     c_path_window = c_path[:, start_idx : end_idx + 1]
-
-    #     # Calculate the distance between the current state and sample points along the path
-    #     # c_path_window is indexed up to end_idx. If nn_idx = end_idx, we still can calculate the unit vector subsequently.
-    #     dist = np.linalg.norm(np.expand_dims(c_state, 1) - c_path_window[:, :end_idx], axis=0)
-    #     nn_idx = np.argmin(dist)
-
-    #     # If the nn_idx corresponds to the last point in the path, return it.
-    #     if start_idx + nn_idx == c_path.shape[1] - 1:
-    #         return nn_idx
-        
-    #     # Else we check which index is the correct point to return.
-        
-    #     # 1. Form the unit vector from current index point to next
-    #     v = c_path_window[:, nn_idx + 1] - c_path_window[:, nn_idx]
-    #     v = v / np.linalg.norm(v)
-        
-    #     # 2. Form vector from nn_idx to current state point
-    #     d = c_state - c_path_window[:, nn_idx]
-    #     d = d / np.linalg.norm(d)
-        
-    #     # 3. A positive projection implies that the current state has not surpassed the nearest neighbor point.
-    #     if np.dot(d, v) > 0:
-    #         return start_idx + nn_idx
-    #     else:
-    #         return start_idx + nn_idx + 1
-
-
     def get_reference_trajectory(self, state, path, target_v, path_step, T, dt):
         """ 
         Given a target velocity, get a reference trajectory based on number of indices
