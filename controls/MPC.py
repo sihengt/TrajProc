@@ -1,5 +1,8 @@
 import casadi as cs
 import numpy as np
+from collections import namedtuple
+
+LinearizedDynamics = namedtuple('LinearizedDynamics', ['A', 'B', 'C'])
 
 class MPC:
     def __init__(self, mpc_params, model):
@@ -17,6 +20,7 @@ class MPC:
                 8. u_ub[list]   (upper bounds of control)
         """
         self.model  = model # model.integrate / model.forward_one_step
+
         self.params = mpc_params
         self.nX     = mpc_params['model']['nStates']
         self.mU     = mpc_params['model']['nActions']
@@ -51,13 +55,15 @@ class MPC:
         """
         Rollout using linearized dynamics from model to populate x_bar.
         """
+        l_linearized_dynamics = []
         for k in range (0, self.T):
             x_k = x_bar[:, k]
             u_k = u_bar[:, k]
             x_kp1, A_d, B_d, C_d = self.model.integrate(x_k, u_k)
+            l_linearized_dynamics.append(LinearizedDynamics(A_d, B_d, C_d))
             x_bar[:, k+1] = x_kp1.full().flatten()
         
-        return x_bar
+        return x_bar, l_linearized_dynamics
 
     def predict(self, x_bar_0, x_ref, u_bar):
         """
@@ -87,8 +93,9 @@ class MPC:
         x_bar[:, 0] = x_bar_0
 
         # Gets x_bar based on u_bar (warm-start for actions).
-        self.rollout(x_bar, u_bar)
-        
+        _, l_linearized_dynamics = self.rollout(x_bar, u_bar)
+        assert(len(l_linearized_dynamics) == self.T)
+
         for k in range(self.T):
             # Initialize action for current_timestep
             e = self.X[:, k] - x_ref[:, k]
@@ -105,7 +112,8 @@ class MPC:
                 lbg.append(-1 * self.params['dU_b'])
                 ubg.append(self.params['dU_b'])
 
-            x_kp1, A, B, C = self.model.integrate(x_bar[:, k], u_bar[:, k])
+            # x_kp1, A, B, C = self.model.integrate(x_bar[:, k], u_bar[:, k])
+            A, B, C = l_linearized_dynamics[k].A, l_linearized_dynamics[k].B, l_linearized_dynamics[k].C
 
             g += [A @ self.X[:, k] + B @ self.U[:, k] + C - self.X[:, k + 1]]
             lbg += [0] * self.nX

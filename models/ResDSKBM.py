@@ -4,8 +4,7 @@ import torch
 import l4casadi as l4c
 import os
 from learning.architecture.dynamicsModel import AdaptiveDynamicsModel
-
-torch.backends.mkldnn.enabled = False
+from collections import deque
 
 import torch.nn as nn
 class AirModel(nn.Module):
@@ -46,6 +45,9 @@ class ResDSKBM:
 
         self.nX = 4
         self.mU = 3
+        self.windowSize = params['train']['trainPredSeqLen']
+        self.hasLSTM = True
+
         model_params = mpc_params['model']
         assert model_params['nStates']  == self.nX
         assert model_params['nActions'] == self.mU
@@ -91,25 +93,12 @@ class ResDSKBM:
 
         ## NEW CODE
         self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
-        self.l4c_device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.lstm = AdaptiveDynamicsModel(params['network'], params['controls'], mpc_params).to(self.device)
         self.lstm.load_state_dict(torch.load(os.path.join(params['dataDir'],'adm.pt'), map_location=torch.device(self.device)))
-        self.l4c_model = l4c.L4CasADi(self.lstm)
+        self.hidden = None
 
-        # LSTM functions
-        self.lstm_input = cs.MX.sym('lstm_in', 1, (self.nX + self.mU) * params['train']['trainPredSeqLen'])        
-        self.lstm_out = self.l4c_model(self.lstm_input)
-
-        self.lstm_input_last_state = self.lstm_input[0, self.nX * params['train']['trainPredSeqLen'] - 1 : self.nX * params['train']['trainPredSeqLen'] - 1 + self.nX]
-        action_index_start = self.nX * params['train']['trainPredSeqLen']
-        self.lstm_input_last_action = self.lstm_input[0, action_index_start + self.mU * params['train']['trainPredSeqLen'] - 1 : action_index_start + self.mU * params['train']['trainPredSeqLen'] - 1 + self.mU]
-
-        self.get_lstm_A = self.init_res_A()
-        self.get_lstm_B = self.init_res_B()
-
-        
-        ##
-
+        self.xdot_q    = deque([np.zeros(self.nX)] * self.windowSize, self.windowSize)
+        self.u_q       = deque([np.zeros(self.mU)] * self.windowSize, self.windowSize)
 
     def init_sideslip_function(self):
         return cs.Function(
@@ -135,35 +124,79 @@ class ResDSKBM:
     def init_B(self):
         return cs.Function('get_B', [self.X, self.U], [cs.jacobian(self.X_dot, self.U)])
 
-    def init_res_A(self):
-        return cs.Function('get_A_res', [self.lstm_input], [cs.jacobian(self.lstm_out, self.lstm_input_last_state)])
-
-    def init_res_B(self):
-        return cs.Function('get_B_res', [self.lstm_input], [cs.jacobian(self.lstm_out, self.lstm_input_last_action)])
+    def window_from_queue(self, q):
+        """
+        Converts deque into tensor
+        """
+        return torch.stack(list(q)).to(self.device)
 
     # TODO: include LSTM stuff
     def integrate(self, X_bar, U_bar):
+        """
+        Params:
+            xdot_window: of dimensions (1, seq_len, num_states)
+            u_window: of dimensions (1, seq_len, num_actions)
+        """
+        # A, B, g (or C) for the normal dynamics model
         A = self.get_A(X_bar, U_bar)
         B = self.get_B(X_bar, U_bar)
-        
-        # To obtain C, we need to integrate f(\bar{x}, \bar{u}) using RK4
-        
+
         f_bar = self.f_x_dot(X=X_bar, U=U_bar)['X_dot']
         g = f_bar - A @ X_bar - B @ U_bar
-        
-        x_kp1 = self.RK4(X_bar, U_bar, A, B, g)
-        
-        A_exp_2 = A @ A
-        A_exp_3 = A_exp_2 @ A
-        A_exp_4 = A_exp_3 @ A
 
-        A_d = cs.DM(np.eye(4)) + (self.dt * A) + (self.dt**2 / 2 * A_exp_2) + (self.dt**3/6 * A_exp_3) + (self.dt**4/24 * A_exp_4)
-        B_d = self.dt * B + (self.dt**2/2 * A @ B) + (self.dt**3/6 * A_exp_2 @ B) + (self.dt**4/24 * A_exp_3 @ B)
-        C_d = self.dt * g + self.dt**2/2 * A @ g + self.dt**3/6 * A_exp_2 @ g + self.dt**4/24 * A_exp_3 @ g     
-        
-        # x_kp1_compare = A_d @ X_bar + B_d @ U_bar + C_d
-        # assert(x_kp1 == x_kp1_compare)
+        # TODO: implement self.window_from_queue
+        xdot_window = self.window_from_queue(self.xdot_q)
+        u_window = self.window_from_queue(self.u_q)
 
+        # A_res, B_res, C_res for the LSTM
+        prev_xdot   = xdot_window[:, 1:, :].detach()      # (1, seqLen-1, 4)
+        prev_action = u_window[:, 1:, :].detach()  # (1, seqLen-1, 3)
+        curr_xdot   = xdot_window[:, 0:1, :].clone().detach().requires_grad_(True) # (1, 1, 4)
+        curr_action = u_window[:, 0:1, :].clone().detach().requires_grad_(True) # (1, 1, 3)
+        
+        def f(curr_x, curr_u):
+            x_w = torch.cat([prev_xdot, curr_x.unsqueeze(1)], dim=1)
+            u_w = torch.cat([prev_action, curr_u.unsqueeze(1)], dim=1)
+            mean, _ = self.lstm(x_w, u_w)
+            return mean.squeeze(0)
+        
+        Jx, Ju = torch.autograd.functional.jacobian(
+            f, 
+            (curr_xdot.squeeze(0), curr_action.squeeze(0)),
+            create_graph=False,
+            vectorize=True
+        )
+        A_res = cs.DM(Jx.squeeze(1).numpy())
+        B_res = cs.DM(Ju.squeeze(1).numpy())
+
+        # To obtain C, we need to integrate f(\bar{x}, \bar{u}) using RK4
+        with torch.no_grad():
+            if not self.hidden is None:
+                mu, sigma, self.hidden = self.lstm(xdot_window, u_window, hidden=self.hidden, returnHidden=True)
+            else:
+                mu, sigma, self.hidden = self.lstm(xdot_window, u_window, returnHidden=True)
+        C_res = cs.DM(mu.numpy().T) - A_res @ X_bar - B_res @ U_bar
+
+        # TODO: check what data structure f_bar is so we can add them into the queue.
+        # Update both xdot_q and u_q for querying during the next timestep
+        self.xdot_q.appendleft(f_bar.T + mu)
+        self.u_q.appendleft(U_bar.T)
+
+        # Linear so just add them together.
+        A_eff = A + A_res
+        B_eff = B + B_res
+        C_eff = g + C_res
+        
+        x_kp1 = self.RK4(X_bar, U_bar, A_eff, B_eff, C_eff)
+        
+        A_exp_2 = A_eff @ A_eff
+        A_exp_3 = A_exp_2 @ A_eff
+        A_exp_4 = A_exp_3 @ A_eff
+
+        A_d = cs.DM(np.eye(4)) + (self.dt * A_eff) + (self.dt**2 / 2 * A_exp_2) + (self.dt**3/6 * A_exp_3) + (self.dt**4/24 * A_exp_4)
+        B_d = self.dt * B_eff + (self.dt**2/2 * A_eff @ B_eff) + (self.dt**3/6 * A_exp_2 @ B_eff) + (self.dt**4/24 * A_exp_3 @ B_eff)
+        C_d = self.dt * C_eff + self.dt**2/2 * A_eff @ C_eff + self.dt**3/6 * A_exp_2 @ C_eff + self.dt**4/24 * A_exp_3 @ C_eff
+        
         return x_kp1, A_d, B_d, C_d
         
     def init_rk4(self):
