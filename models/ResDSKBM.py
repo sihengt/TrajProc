@@ -7,6 +7,9 @@ from learning.architecture.dynamicsModel import AdaptiveDynamicsModel
 from collections import deque
 
 import torch.nn as nn
+
+torch.backends.cudnn.enabled = False
+
 class AirModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -124,11 +127,11 @@ class ResDSKBM:
     def init_B(self):
         return cs.Function('get_B', [self.X, self.U], [cs.jacobian(self.X_dot, self.U)])
 
-    def window_from_queue(self, q):
+    def window_from_queue(self, queue):
         """
         Converts deque into tensor
         """
-        return torch.stack(list(q)).to(self.device)
+        return torch.stack([torch.tensor(x, dtype=torch.float32, device=self.device) for x in list(queue)])
 
     # TODO: include LSTM stuff
     def integrate(self, X_bar, U_bar):
@@ -148,12 +151,15 @@ class ResDSKBM:
         xdot_window = self.window_from_queue(self.xdot_q)
         u_window = self.window_from_queue(self.u_q)
 
+        xdot_window = xdot_window.unsqueeze(0)
+        u_window = u_window.unsqueeze(0)
+
         # A_res, B_res, C_res for the LSTM
         prev_xdot   = xdot_window[:, 1:, :].detach()      # (1, seqLen-1, 4)
         prev_action = u_window[:, 1:, :].detach()  # (1, seqLen-1, 3)
         curr_xdot   = xdot_window[:, 0:1, :].clone().detach().requires_grad_(True) # (1, 1, 4)
         curr_action = u_window[:, 0:1, :].clone().detach().requires_grad_(True) # (1, 1, 3)
-        
+
         def f(curr_x, curr_u):
             x_w = torch.cat([prev_xdot, curr_x.unsqueeze(1)], dim=1)
             u_w = torch.cat([prev_action, curr_u.unsqueeze(1)], dim=1)
@@ -166,21 +172,24 @@ class ResDSKBM:
             create_graph=False,
             vectorize=True
         )
-        A_res = cs.DM(Jx.squeeze(1).numpy())
-        B_res = cs.DM(Ju.squeeze(1).numpy())
+        A_res = cs.DM(Jx.squeeze(1).cpu().numpy())
+        B_res = cs.DM(Ju.squeeze(1).cpu().numpy())
 
         # To obtain C, we need to integrate f(\bar{x}, \bar{u}) using RK4
         with torch.no_grad():
             if not self.hidden is None:
                 mu, sigma, self.hidden = self.lstm(xdot_window, u_window, hidden=self.hidden, returnHidden=True)
+                mu = mu.cpu()
             else:
                 mu, sigma, self.hidden = self.lstm(xdot_window, u_window, returnHidden=True)
+                mu = mu.cpu()
         C_res = cs.DM(mu.numpy().T) - A_res @ X_bar - B_res @ U_bar
 
         # TODO: check what data structure f_bar is so we can add them into the queue.
         # Update both xdot_q and u_q for querying during the next timestep
-        self.xdot_q.appendleft(f_bar.T + mu)
-        self.u_q.appendleft(U_bar.T)
+        xdot_k = torch.tensor(f_bar.T.full(), dtype=torch.float32) + mu.cpu()
+        self.xdot_q.appendleft(xdot_k.squeeze(0))
+        self.u_q.appendleft(torch.tensor(U_bar, dtype=torch.float32))
 
         # Linear so just add them together.
         A_eff = A + A_res
