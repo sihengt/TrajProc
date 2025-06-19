@@ -86,6 +86,46 @@ class TrajProc:
     
         return nn_idx
 
+    def get_nn_idx_with_window(self, state, path, last_idx, window=10):
+            """
+            Params:
+                state: (x, y, yaw)
+                path: (2, N)
+            """
+            # cartesian state
+            c_state = state[:2]
+            c_path = path[:2]
+
+            # Calculate the distance between the current state and sample points along the path    
+            dist = np.linalg.norm(np.expand_dims(c_state, 1) - c_path, axis=0)
+            nn_idx = np.argmin(dist)
+
+            # If the nn_idx corresponds to the last point in the path, return it.
+            if nn_idx == c_path.shape[1] - 1:
+                return nn_idx
+            
+            # Else we check which index is the correct point to return.
+            
+            # 1. Form the unit vector from current index point to next
+            v = [
+                path[0, nn_idx + 1] - path[0, nn_idx],
+                path[1, nn_idx + 1] - path[1, nn_idx]
+            ]
+            v /= np.linalg.norm(v)
+
+            # 2. Form vector from nn_idx to current state point
+            d = c_path[:, nn_idx] - c_state
+            
+            # 3. A positive projection implies that the current state has not surpassed the nearest neighbor point.
+            if np.dot(d, v) <= 0:
+                nn_idx += 1
+            
+            if nn_idx > last_idx + window:
+                return last_idx + window
+            
+            return nn_idx
+
+
     def get_reference_trajectory(self, state, path, target_v, path_step, T, dt):
         """ 
         Given a target velocity, get a reference trajectory based on number of indices
@@ -104,7 +144,9 @@ class TrajProc:
 
         path_length = path.shape[1]
 
-        nn_idx = self.get_nn_idx(state, path)
+        # nn_idx = self.get_nn_idx(state, path)
+        nn_idx = self.get_nn_idx_with_window(state, path, self.lastIndex)
+        self.lastIndex = nn_idx
         ref_traj_idx = [nn_idx]
         
         # Updates TrajProc memory so we do not accidentally backtrack or skip forward too much.

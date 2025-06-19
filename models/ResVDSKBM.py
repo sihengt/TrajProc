@@ -10,7 +10,7 @@ import torch.nn as nn
 
 torch.backends.cudnn.enabled = False
 
-class ResDSKBM:
+class ResVDSKBM:
     """
     Double Steer Kinematic Bicycle Model assumes:
         1. Velocity of each wheel points at the direction the wheel is facing (i.e. steering angle)
@@ -27,14 +27,13 @@ class ResDSKBM:
         """        
         mpc_params = params['mpc']
 
-        self.nX = 4 
-        self.nX = 2
+        self.nX = 4
         self.mU = 3
         self.windowSize = params['train']['trainPredSeqLen']
         self.hasLSTM = True
 
         model_params = mpc_params['model']
-        # assert model_params['nStates']  == self.nX
+        assert model_params['nStates']  == self.nX
         assert model_params['nActions'] == self.mU
         self.L      = model_params['L']     # Wheelbase
         self.l_f    = model_params['l_f']   # Front wheel
@@ -82,8 +81,8 @@ class ResDSKBM:
         self.lstm.load_state_dict(torch.load(os.path.join(params['dataDir'],'adm.pt'), map_location=torch.device(self.device)))
         self.hidden = None
 
-        self.x_q = deque([torch.zeros(self.nX, dtype=torch.float32, device=self.device)] * self.windowSize, self.windowSize)
-        self.u_q = deque([torch.zeros(self.mU, dtype=torch.float32, device=self.device)] * self.windowSize, self.windowSize)
+        self.xdot_q    = deque([torch.zeros(self.nX, dtype=torch.float32, device=self.device)] * self.windowSize, self.windowSize)
+        self.u_q       = deque([torch.zeros(self.mU, dtype=torch.float32, device=self.device)] * self.windowSize, self.windowSize)
 
     def init_sideslip_function(self):
         return cs.Function(
@@ -115,36 +114,12 @@ class ResDSKBM:
         """
         return torch.stack(list(queue))
 
-    def update_queue(self, X_new, U_new):
-        self.x_q.append(torch.tensor(X_new[2:], dtype=torch.float32, device=self.device))
-        self.u_q.append(torch.tensor(U_new, dtype=torch.float32, device=self.device))
-
-    def query_lstm(self, useHidden=False, updateHidden=False):
-        with torch.no_grad():
-            if useHidden:                
-                mean, _, hidden = self.lstm(
-                    self.window_from_queue(self.x_q).unsqueeze(0),
-                    self.window_from_queue(self.u_q).unsqueeze(0), 
-                    hidden=self.hidden,
-                    returnHidden=True) # (1, 4)
-            else:
-                mean, _, hidden = self.lstm(
-                    self.window_from_queue(self.x_q).unsqueeze(0),
-                    self.window_from_queue(self.u_q).unsqueeze(0), 
-                    hidden=self.hidden,
-                    returnHidden=True) # (1, 4)
-            
-            if updateHidden:
-                self.hidden = hidden
-
-        return mean
-
     # TODO: include LSTM stuff
     def integrate(self, X_bar, U_bar):
         """
         Params:
-            X_bar: 
-            U_bar: 
+            xdot_window: of dimensions (1, seq_len, num_states)
+            u_window: of dimensions (1, seq_len, num_actions)
         """
         # A, B, g (or C) for the normal dynamics model
         A = self.get_A(X_bar, U_bar)
@@ -154,49 +129,66 @@ class ResDSKBM:
         g = f_bar - A @ X_bar - B @ U_bar
 
         # TODO: implement self.window_from_queue
-        x_window = self.window_from_queue(self.x_q)
+        xdot_window = self.window_from_queue(self.xdot_q)
         u_window = self.window_from_queue(self.u_q)
 
-        x_window = x_window.unsqueeze(0)
+        xdot_window = xdot_window.unsqueeze(0)
         u_window = u_window.unsqueeze(0)
 
-        # A_res, B_res, C_res for the LSTM
-        prev_x = x_window[:, :-1, :].detach() # (1, seqLen-1, 4)
-        prev_u = u_window[:, :-1, :].detach() # (1, seqLen-1, 3)
-        curr_x = x_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 4)
-        curr_u = u_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 3)        
+        # # A_res, B_res, C_res for the LSTM
+        # prev_xdot   = xdot_window[:, :-1, :].detach()      # (1, seqLen-1, 4)
+        # prev_action = u_window[:, :-1, :].detach()  # (1, seqLen-1, 3)
+        # curr_xdot   = xdot_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 4)
+        # curr_action = u_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 3)        
 
-        def f(curr_x, curr_u):
-            x_w = torch.cat([prev_x, curr_x.unsqueeze(1)], dim=1)
-            u_w = torch.cat([prev_u, curr_u.unsqueeze(1)], dim=1)
-            mean, _ = self.lstm(x_w, u_w)
-            return mean.squeeze(0)
+        # def f(curr_x, curr_u):
+        #     x_w = torch.cat([prev_xdot, curr_x.unsqueeze(1)], dim=1)
+        #     u_w = torch.cat([prev_action, curr_u.unsqueeze(1)], dim=1)
+        #     mean, _ = self.lstm(x_w, u_w)
+        #     return mean.squeeze(0)
         
-        Jx, Ju = torch.autograd.functional.jacobian(
-            f, 
-            (curr_x.squeeze(0), curr_u.squeeze(0)),
-            create_graph=False,
-            vectorize=True
-        )
-        A_res = Jx.squeeze(1).cpu().numpy()
-        A_res = np.hstack((np.zeros((4,2)), A_res))
-        B_res = cs.DM(Ju.squeeze(1).cpu().numpy())
+        # Jx, Ju = torch.autograd.functional.jacobian(
+        #     f, 
+        #     (curr_xdot.squeeze(0), curr_action.squeeze(0)),
+        #     create_graph=False,
+        #     vectorize=True
+        # )
+        # A_res = cs.DM(Jx.squeeze(1).cpu().numpy())
+        # B_res = cs.DM(Ju.squeeze(1).cpu().numpy())
 
         # To obtain C, we need to integrate f(\bar{x}, \bar{u}) using RK4
-        mu = self.query_lstm(useHidden=False, updateHidden=False)
-        mu = mu.to("cpu")
+        with torch.no_grad():
+            if not self.hidden is None:
+                mu, sigma, self.hidden = self.lstm(
+                    xdot_window,
+                    u_window,
+                    hidden=self.hidden,
+                    returnHidden=True)
+                mu = mu.cpu()
+            else:
+                mu, sigma, self.hidden = self.lstm(
+                    xdot_window,
+                    u_window,
+                    returnHidden=True)
+                mu = mu.cpu()
         
         C_res = cs.DM(mu.numpy().T) #- A_res @ X_bar - B_res @ U_bar
 
-        # Update both x_q and u_q for querying during the next timestep
-        self.update_queue(X_bar, U_bar)
+        # TODO: check what data structure f_bar is so we can add them into the queue.
+        # Update both xdot_q and u_q for querying during the next timestep
+        xdot_k = torch.tensor(f_bar.T.full(), dtype=torch.float32) + mu.cpu()
+        self.xdot_q.append(xdot_k.squeeze(0).to(self.device))
+        self.u_q.append(torch.tensor(U_bar, dtype=torch.float32, device=self.device))
 
         # Linear so just add them together.
-        A_eff = A #+ A_res
-        B_eff = B #+ B_res
-        C_eff = g #+ C_res
+        # TODO: when I subtract the model makes more sense, though it's definitely not better than without.
+        A_eff = A #- A_res
+        B_eff = B #- B_res
+        C_eff = g + C_res
         
         x_kp1 = self.RK4(X_bar, U_bar, A_eff, B_eff, C_eff)
+        
+        # C_eff = g + C_res
         
         A_exp_2 = A_eff @ A_eff
         A_exp_3 = A_exp_2 @ A_eff
@@ -257,5 +249,4 @@ class ResDSKBM:
         F = cs.integrator('F', 'idas', self.dae, {'tf':self.dt})
         r = F(x0=x0, p=u)
         return r['xf'].full().flatten()
-
 

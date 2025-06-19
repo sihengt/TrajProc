@@ -10,7 +10,7 @@ import torch.nn as nn
 
 torch.backends.cudnn.enabled = False
 
-class ResDSKBM:
+class FullResDSKBM:
     """
     Double Steer Kinematic Bicycle Model assumes:
         1. Velocity of each wheel points at the direction the wheel is facing (i.e. steering angle)
@@ -27,14 +27,13 @@ class ResDSKBM:
         """        
         mpc_params = params['mpc']
 
-        self.nX = 4 
-        self.nX = 2
+        self.nX = 4
         self.mU = 3
         self.windowSize = params['train']['trainPredSeqLen']
         self.hasLSTM = True
 
         model_params = mpc_params['model']
-        # assert model_params['nStates']  == self.nX
+        assert model_params['nStates']  == self.nX
         assert model_params['nActions'] == self.mU
         self.L      = model_params['L']     # Wheelbase
         self.l_f    = model_params['l_f']   # Front wheel
@@ -83,6 +82,7 @@ class ResDSKBM:
         self.hidden = None
 
         self.x_q = deque([torch.zeros(self.nX, dtype=torch.float32, device=self.device)] * self.windowSize, self.windowSize)
+        self.xd_q = deque([torch.zeros(self.nX, dtype=torch.float32, device=self.device)] * self.windowSize, self.windowSize)
         self.u_q = deque([torch.zeros(self.mU, dtype=torch.float32, device=self.device)] * self.windowSize, self.windowSize)
 
     def init_sideslip_function(self):
@@ -115,8 +115,9 @@ class ResDSKBM:
         """
         return torch.stack(list(queue))
 
-    def update_queue(self, X_new, U_new):
-        self.x_q.append(torch.tensor(X_new[2:], dtype=torch.float32, device=self.device))
+    def update_queue(self, X_new, Xd_new, U_new):
+        self.x_q.append(torch.tensor(X_new, dtype=torch.float32, device=self.device))
+        self.xd_q.append(torch.tensor(Xd_new, dtype=torch.float32, device=self.device))
         self.u_q.append(torch.tensor(U_new, dtype=torch.float32, device=self.device))
 
     def query_lstm(self, useHidden=False, updateHidden=False):
@@ -124,12 +125,14 @@ class ResDSKBM:
             if useHidden:                
                 mean, _, hidden = self.lstm(
                     self.window_from_queue(self.x_q).unsqueeze(0),
+                    self.window_from_queue(self.xd_q).unsqueeze(0),
                     self.window_from_queue(self.u_q).unsqueeze(0), 
                     hidden=self.hidden,
                     returnHidden=True) # (1, 4)
             else:
                 mean, _, hidden = self.lstm(
                     self.window_from_queue(self.x_q).unsqueeze(0),
+                    self.window_from_queue(self.xd_q).unsqueeze(0),
                     self.window_from_queue(self.u_q).unsqueeze(0), 
                     hidden=self.hidden,
                     returnHidden=True) # (1, 4)
@@ -140,36 +143,42 @@ class ResDSKBM:
         return mean
 
     # TODO: include LSTM stuff
-    def integrate(self, X_bar, U_bar):
+    def integrate(self, X_bar, U_bar, Xd_prev):
         """
         Params:
             X_bar: 
             U_bar: 
         """
-        # A, B, g (or C) for the normal dynamics model
+        ## Part 1: Getting A, B, g from KBM. This one is definitely correct.
         A = self.get_A(X_bar, U_bar)
         B = self.get_B(X_bar, U_bar)
 
         f_bar = self.f_x_dot(X=X_bar, U=U_bar)['X_dot']
         g = f_bar - A @ X_bar - B @ U_bar
 
-        # TODO: implement self.window_from_queue
+        ## Part 2: Getting A_res, B_res, C_res from LSTM.
+        # Update both x_q and u_q for querying during the next timestep
+        self.update_queue(X_bar, Xd_prev, U_bar)
+
         x_window = self.window_from_queue(self.x_q)
+        xd_window = self.window_from_queue(self.xd_q)
         u_window = self.window_from_queue(self.u_q)
 
         x_window = x_window.unsqueeze(0)
+        xd_window = xd_window.unsqueeze(0)
         u_window = u_window.unsqueeze(0)
 
         # A_res, B_res, C_res for the LSTM
         prev_x = x_window[:, :-1, :].detach() # (1, seqLen-1, 4)
         prev_u = u_window[:, :-1, :].detach() # (1, seqLen-1, 3)
+        prev_xd = xd_window.detach()
         curr_x = x_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 4)
         curr_u = u_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 3)        
 
         def f(curr_x, curr_u):
             x_w = torch.cat([prev_x, curr_x.unsqueeze(1)], dim=1)
             u_w = torch.cat([prev_u, curr_u.unsqueeze(1)], dim=1)
-            mean, _ = self.lstm(x_w, u_w)
+            mean, _ = self.lstm(x_w, prev_xd, u_w)
             return mean.squeeze(0)
         
         Jx, Ju = torch.autograd.functional.jacobian(
@@ -178,23 +187,34 @@ class ResDSKBM:
             create_graph=False,
             vectorize=True
         )
-        A_res = Jx.squeeze(1).cpu().numpy()
-        A_res = np.hstack((np.zeros((4,2)), A_res))
+        A_res = cs.DM(Jx.squeeze(1).cpu().numpy())
         B_res = cs.DM(Ju.squeeze(1).cpu().numpy())
 
         # To obtain C, we need to integrate f(\bar{x}, \bar{u}) using RK4
         mu = self.query_lstm(useHidden=False, updateHidden=False)
-        mu = mu.to("cpu")
+        # with torch.no_grad():
+        #     if not self.hidden is None:
+        #         mu, sigma, self.hidden = self.lstm(
+        #             x_window,
+        #             xd_window,
+        #             u_window,
+        #             hidden=self.hidden,
+        #             returnHidden=True)
+        #         mu = mu.cpu()
+        #     else:
+        #         mu, sigma, self.hidden = self.lstm(
+        #             x_window,
+        #             xd_window,
+        #             u_window,
+        #             returnHidden=True)
+        #         mu = mu.cpu()
         
-        C_res = cs.DM(mu.numpy().T) #- A_res @ X_bar - B_res @ U_bar
-
-        # Update both x_q and u_q for querying during the next timestep
-        self.update_queue(X_bar, U_bar)
+        C_res = cs.DM(mu.numpy().T) - A_res @ X_bar - B_res @ U_bar
 
         # Linear so just add them together.
-        A_eff = A #+ A_res
-        B_eff = B #+ B_res
-        C_eff = g #+ C_res
+        A_eff = A - A_res
+        B_eff = B - B_res
+        C_eff = g + C_res
         
         x_kp1 = self.RK4(X_bar, U_bar, A_eff, B_eff, C_eff)
         

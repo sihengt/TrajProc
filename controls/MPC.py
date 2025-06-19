@@ -20,7 +20,7 @@ class MPC:
                 8. u_ub[list]   (upper bounds of control)
         """
         self.model  = model # model.integrate / model.forward_one_step
-
+        self.hasLSTM = getattr(self.model, "hasLSTM", False)
         self.params = mpc_params
         self.nX     = mpc_params['model']['nStates']
         self.mU     = mpc_params['model']['nActions']
@@ -41,8 +41,8 @@ class MPC:
         U_ub = cs.repmat(U_ub_row, self.T, 1)
 
         # Stacking decision variables and contraints
-        vec = lambda M: cs.reshape(M, -1, 1)
-        self.w = cs.vertcat(vec(self.X), vec(self.U))
+        self.vec = lambda M: cs.reshape(M, -1, 1)
+        self.w = cs.vertcat(self.vec(self.X), self.vec(self.U))
         self.lbw = cs.vertcat(X_lb, U_lb)
         self.ubw = cs.vertcat(X_ub, U_ub)
         self.lbw = cs.vertcat(X_lb, U_lb)
@@ -56,16 +56,25 @@ class MPC:
         Rollout using linearized dynamics from model to populate x_bar.
         """
         l_linearized_dynamics = []
+        
+        # xd_km1 = np.zeros(4)
+        
         for k in range (0, self.T):
             x_k = x_bar[:, k]
             u_k = u_bar[:, k]
+            
             x_kp1, A_d, B_d, C_d = self.model.integrate(x_k, u_k)
-            l_linearized_dynamics.append(LinearizedDynamics(A_d, B_d, C_d))
+            
+            # x_kp1, A_d, B_d, C_d = self.model.integrate(x_k, u_k, xd_km1)
+            # xd_km1 = self.model.f_x_dot(x_k, u_k).full().flatten()
+            
+            l_linearized_dynamics.append(LinearizedDynamics(A_d, B_d, C_d))            
+            assert(np.linalg.norm((x_kp1 - (A_d @ x_k + B_d @ u_k + C_d)).full()) < 1e-3)
             x_bar[:, k+1] = x_kp1.full().flatten()
         
         return x_bar, l_linearized_dynamics
 
-    def predict(self, x_bar_0, x_ref, u_bar):
+    def predict(self, x_bar_0, x_ref, u_bar, n_iters=1):
         """
         Solves MPC problem over a reference track.
 
@@ -82,62 +91,80 @@ class MPC:
             x_ref: reference trajectory used to get optimized states / actions.
         """
         
-        # Initialization for solving MPC problem.
-        g = []      # Constraint
-        lbg = []    # Lower bound for constraints
-        ubg = []    # Upper bound for constraints
-        J = 0       # Cost
+        # Make a copy of self.model here.
+        # Reinitialize to copy of self.model everytime.
+        import copy
+        current_model = copy.deepcopy(self.model)
 
-        # Initial guess of state. It doesn't have to be accurate but it helps to be dynamically accurate.
-        x_bar = np.zeros((self.nX, self.T+1))
-        x_bar[:, 0] = x_bar_0
+        for _ in range(n_iters):
+            # Initial guess of state. It doesn't have to be accurate but it helps to be dynamically accurate.
+            x_bar = np.zeros((self.nX, self.T+1))
+            x_bar[:, 0] = x_bar_0
+            
+            # Initialization for solving MPC problem.
+            g = []      # Constraint
+            lbg = []    # Lower bound for constraints
+            ubg = []    # Upper bound for constraints
+            J = 0       # Cost
 
-        # Gets x_bar based on u_bar (warm-start for actions).
-        _, l_linearized_dynamics = self.rollout(x_bar, u_bar)
-        assert(len(l_linearized_dynamics) == self.T)
+            self.model = copy.deepcopy(current_model)
 
-        for k in range(self.T):
-            # Initialize action for current_timestep
-            e = self.X[:, k] - x_ref[:, k]
-            J += e.T @ self.params['Q'] @ e
-            J += self.U[:, k].T @ self.params['R'] @ self.U[:, k]
+            # Gets x_bar based on u_bar (warm-start for actions).
+            _, l_linearized_dynamics = self.rollout(x_bar, u_bar)
+            assert(len(l_linearized_dynamics) == self.T)
 
-            # Handling constraints to smooth controls
-            if k < (self.T - 1):
-                e_u = self.U[:, k+1] - self.U[:, k]
-                J += e_u.T @ self.params['R_'] @ e_u
+            for k in range(self.T):
+                # Initialize action for current_timestep
+                e = self.X[:, k] - x_ref[:, k]
+                J += e.T @ self.params['Q'] @ e
+                J += self.U[:, k].T @ self.params['R'] @ self.U[:, k]
 
-                d_u = e_u / self.dt
-                g += [d_u]
-                lbg.append(-1 * self.params['dU_b'])
-                ubg.append(self.params['dU_b'])
+                # Handling constraints to smooth controls
+                if k < (self.T - 1):
+                    e_u = self.U[:, k + 1] - self.U[:, k]
+                    J += e_u.T @ self.params['R_'] @ e_u
 
-            # x_kp1, A, B, C = self.model.integrate(x_bar[:, k], u_bar[:, k])
-            A, B, C = l_linearized_dynamics[k].A, l_linearized_dynamics[k].B, l_linearized_dynamics[k].C
+                    d_u = e_u / self.dt
+                    g += [d_u]
+                    lbg.append(-1 * self.params['dU_b'])
+                    ubg.append(self.params['dU_b'])
 
-            g += [A @ self.X[:, k] + B @ self.U[:, k] + C - self.X[:, k + 1]]
+                # x_kp1, A, B, C = self.model.integrate(x_bar[:, k], u_bar[:, k])
+                A, B, C = l_linearized_dynamics[k].A, l_linearized_dynamics[k].B, l_linearized_dynamics[k].C
+
+                g += [A @ self.X[:, k] + B @ self.U[:, k] + C - self.X[:, k + 1]]
+                lbg += [0] * self.nX
+                ubg += [0] * self.nX
+
+            # Terminal cost
+            e_xn = self.X[:, self.T] - x_ref[:, self.T]
+            J += e_xn.T @ self.params['Qf'] @ e_xn
+
+            # Setting a constraint for initial state.
+            g += [self.X[:, 0] - x_bar[:, 0]]
             lbg += [0] * self.nX
             ubg += [0] * self.nX
 
-        # Terminal cost
-        e_xn = self.X[:, self.T] - x_ref[:, self.T]
-        J += e_xn.T @ self.params['Qf'] @ e_xn
+            # g += [self.U[:, 0] - u_bar[:, 0]]
+            # lbg.append(-1 * self.params['dU_b'])
+            # ubg.append(self.params['dU_b'])
 
-        # Setting a constraint for initial state.
-        g += [self.X[:, 0] - x_bar[:, 0]]
-        lbg += [0] * self.nX
-        ubg += [0] * self.nX
+            qp_opts = {"error_on_fail": True, "print_problem": False, "verbose":False, "printLevel": "none"}
+            assert cs.vertcat(*g).shape == cs.vertcat(*lbg).shape
+            assert cs.vertcat(*g).shape == cs.vertcat(*ubg).shape
+            prob    = {'x': self.w, 'f': J, 'g': cs.vertcat(*g)}
+            solver  = cs.qpsol('solver', 'qpoases', prob, qp_opts)
+            sol     = solver(lbx=self.lbw, ubx=self.ubw, lbg=cs.vertcat(*lbg), ubg=cs.vertcat(*ubg),
+                             x0=cs.vertcat(self.vec(cs.DM(x_bar)), self.vec(cs.DM(u_bar)))
+                            )
 
-        qp_opts = {"error_on_fail": True, "print_problem": False, "verbose":False, "printLevel": "none"}
-        prob    = {'x': self.w, 'f': J, 'g': cs.vertcat(*g)}
-        solver  = cs.qpsol('solver', 'qpoases', prob, qp_opts)
-        sol     = solver(lbx=self.lbw, ubx=self.ubw, lbg=cs.vertcat(*lbg), ubg=cs.vertcat(*ubg))
+            X_sol = sol['x']
+            # Take the evenly shaped portions first.
+            # Reshape so every column corresponds to a time step
+            X_mpc = cs.reshape(sol['x'][:self.nX * (self.T+1)], self.nX, self.T+1).full()
+            U_mpc = cs.reshape(sol['x'][self.nX * (self.T+1):], self.mU, self.T).full()
 
-        X_sol = sol['x']
-        # Take the evenly shaped portions first.
-        # Reshape so every column corresponds to a time step
-        X_mpc = cs.reshape(sol['x'][:self.nX * (self.T+1)], self.nX, self.T+1).full()
-        U_mpc = cs.reshape(sol['x'][self.nX * (self.T+1):], self.mU, self.T).full()
+            u_bar = U_mpc
         
         return X_mpc, U_mpc, x_ref
 
