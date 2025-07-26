@@ -140,7 +140,7 @@ class ResDSKBM:
         return mean
 
     # TODO: include LSTM stuff
-    def integrate(self, X_bar, U_bar):
+    def integrate(self, X_bar, U_bar, use_lstm=True):
         """
         Params:
             X_bar: 
@@ -166,35 +166,21 @@ class ResDSKBM:
         curr_x = x_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 4)
         curr_u = u_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 3)        
 
-        def f(curr_x, curr_u):
-            x_w = torch.cat([prev_x, curr_x.unsqueeze(1)], dim=1)
-            u_w = torch.cat([prev_u, curr_u.unsqueeze(1)], dim=1)
-            mean, _ = self.lstm(x_w, u_w)
-            return mean.squeeze(0)
-        
-        Jx, Ju = torch.autograd.functional.jacobian(
-            f, 
-            (curr_x.squeeze(0), curr_u.squeeze(0)),
-            create_graph=False,
-            vectorize=True
-        )
-        A_res = Jx.squeeze(1).cpu().numpy()
-        A_res = np.hstack((np.zeros((4,2)), A_res))
-        B_res = cs.DM(Ju.squeeze(1).cpu().numpy())
-
         # To obtain C, we need to integrate f(\bar{x}, \bar{u}) using RK4
-        mu = self.query_lstm(useHidden=False, updateHidden=False)
-        mu = mu.to("cpu")
-        
-        C_res = cs.DM(mu.numpy().T) #- A_res @ X_bar - B_res @ U_bar
-
+        if use_lstm:
+            mu = self.query_lstm(useHidden=False, updateHidden=False)
+            mu = mu.to("cpu")
+            C_res = cs.DM(mu.numpy().T) #- A_res @ X_bar - B_res @ U_bar
+            C_eff = g + C_res
+        else:
+            C_eff = g
+            
         # Update both x_q and u_q for querying during the next timestep
         self.update_queue(X_bar, U_bar)
 
         # Linear so just add them together.
         A_eff = A #+ A_res
         B_eff = B #+ B_res
-        C_eff = g #+ C_res
         
         x_kp1 = self.RK4(X_bar, U_bar, A_eff, B_eff, C_eff)
         

@@ -86,6 +86,8 @@ class TrajProc:
     
         return nn_idx
 
+
+
     def get_nn_idx_with_window(self, state, path, last_idx, window=10):
             """
             Params:
@@ -103,7 +105,7 @@ class TrajProc:
             # If the nn_idx corresponds to the last point in the path, return it.
             if nn_idx == c_path.shape[1] - 1:
                 return nn_idx
-            
+        
             # Else we check which index is the correct point to return.
             
             # 1. Form the unit vector from current index point to next
@@ -125,7 +127,6 @@ class TrajProc:
             
             return nn_idx
 
-
     def get_reference_trajectory(self, state, path, target_v, path_step, T, dt):
         """ 
         Given a target velocity, get a reference trajectory based on number of indices
@@ -146,7 +147,6 @@ class TrajProc:
 
         # nn_idx = self.get_nn_idx(state, path)
         nn_idx = self.get_nn_idx_with_window(state, path, self.lastIndex)
-        self.lastIndex = nn_idx
         ref_traj_idx = [nn_idx]
         
         # Updates TrajProc memory so we do not accidentally backtrack or skip forward too much.
@@ -172,58 +172,12 @@ class TrajProc:
                 xref[3, i] = path[2, nn_idx + n_indices]
                 ref_traj_idx.append(nn_idx + n_indices)
             else:
-                xref[0, i] = path[0, path_length - 1]
-                xref[1, i] = path[1, path_length - 1]
+                xref[0, i] = path[0, (nn_idx + n_indices) % path_length]
+                xref[1, i] = path[1, (nn_idx + n_indices) % path_length]
                 xref[2, i] = 0.0
-                xref[3, i] = path[2, path_length - 1]
-                ref_traj_idx.append(path_length - 1)
+                xref[3, i] = path[2, (nn_idx + n_indices) % path_length]
+                ref_traj_idx.append((nn_idx + n_indices) % path_length)
 
         xref[3, :] = np.unwrap(xref[3, :])
 
         return xref, nn_idx, ref_traj_idx
-
-    def get_reference_trajectory_no_accel(self, state, path, target_v, track_step, T, dt):
-        """ 
-        Given a target velocity, get a reference trajectory based on number of indices
-        traversed along the precomputed path.
-
-        Params:
-            state: (n_states, 1): In our specific case (x, y, velocity, yaw) OR (x, y, yaw)
-            path: (3, N) full path that contains (x, y, theta).
-            target_v: target velocity to generate reference trajectory with.
-            track_step: distance between subsequent points on the reference track.
-            T: time horizon of MPC (also number of points we need to collect from the track for reference)
-            dt: timestep used in MPC
-        Returns:
-            xref: (n_states, T+1): T = horizon
-            dref: all 0's because it's to be optimized for.
-        """
-        xref = np.zeros((3, T + 1))
-        dref = np.zeros((1, T + 1))
-
-        path_length = path.shape[1]
-
-        nn_idx = self.get_nn_idx(state, path)
-
-        xref[0, 0] = path[0, nn_idx]
-        xref[1, 0] = path[1, nn_idx]
-        xref[2, 0] = path[2, nn_idx]
-        
-        # The track is formed with a step parameter dictating distance between each waypoint.
-        dl = track_step
-        travel = 0.0
-
-        for i in range(T + 1):
-            travel += abs(target_v) * dt
-            n_indices = int(round(travel / dl))
-
-            if (nn_idx + n_indices) < path_length:
-                xref[0, i] = path[0, nn_idx + n_indices]
-                xref[1, i] = path[1, nn_idx + n_indices]
-                xref[2, i] = path[2, nn_idx + n_indices]
-            else:
-                xref[0, i] = path[0, path_length - 1]
-                xref[1, i] = path[1, path_length - 1]
-                xref[2, i] = path[2, path_length - 1]
-
-        return xref, dref

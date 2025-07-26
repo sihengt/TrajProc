@@ -64,10 +64,7 @@ class MPC:
             u_k = u_bar[:, k]
             
             x_kp1, A_d, B_d, C_d = self.model.integrate(x_k, u_k)
-            
-            # x_kp1, A_d, B_d, C_d = self.model.integrate(x_k, u_k, xd_km1)
-            # xd_km1 = self.model.f_x_dot(x_k, u_k).full().flatten()
-            
+                        
             l_linearized_dynamics.append(LinearizedDynamics(A_d, B_d, C_d))            
             assert(np.linalg.norm((x_kp1 - (A_d @ x_k + B_d @ u_k + C_d)).full()) < 1e-3)
             x_bar[:, k+1] = x_kp1.full().flatten()
@@ -96,7 +93,7 @@ class MPC:
         import copy
         current_model = copy.deepcopy(self.model)
 
-        for _ in range(n_iters):
+        for i_mpc_iter in range(n_iters):
             # Initial guess of state. It doesn't have to be accurate but it helps to be dynamically accurate.
             x_bar = np.zeros((self.nX, self.T+1))
             x_bar[:, 0] = x_bar_0
@@ -129,7 +126,6 @@ class MPC:
                     lbg.append(-1 * self.params['dU_b'])
                     ubg.append(self.params['dU_b'])
 
-                # x_kp1, A, B, C = self.model.integrate(x_bar[:, k], u_bar[:, k])
                 A, B, C = l_linearized_dynamics[k].A, l_linearized_dynamics[k].B, l_linearized_dynamics[k].C
 
                 g += [A @ self.X[:, k] + B @ self.U[:, k] + C - self.X[:, k + 1]]
@@ -163,6 +159,13 @@ class MPC:
             # Reshape so every column corresponds to a time step
             X_mpc = cs.reshape(sol['x'][:self.nX * (self.T+1)], self.nX, self.T+1).full()
             U_mpc = cs.reshape(sol['x'][self.nX * (self.T+1):], self.mU, self.T).full()
+
+            # Simple convergence check
+            # tol = 1e-3
+            # delta_u = U_mpc - u_bar
+            # if np.linalg.norm(delta_u, np.inf) < tol:
+            #     print("Early convergence in {} iters.".format(i_mpc_iter))
+            #     break
 
             u_bar = U_mpc
         
