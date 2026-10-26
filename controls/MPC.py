@@ -1,6 +1,8 @@
+import copy
+from collections import namedtuple
+
 import casadi as cs
 import numpy as np
-from collections import namedtuple
 
 LinearizedDynamics = namedtuple('LinearizedDynamics', ['A', 'B', 'C'])
 
@@ -8,19 +10,13 @@ class MPC:
     def __init__(self, mpc_params, model):
         """
         Params:
-            model: contains functions for integrate
-            params: dictionary containing the following attributes:
-                1. n_x           (x in R^{n_x})
-                2. m_u           (u in R^{m_u})
-                3. T            (Time horizon of MPC)
-                4. DT           (T control interval)
-                5. X_lb[list]   (lower bounds of x)
-                6. X_ub[list]   (upper bounds of x)
-                7. u_lb[list]   (lower bounds of control)
-                8. u_ub[list]   (upper bounds of control)
+            mpc_params: dict from MPCConfigLoader.construct_casadi_params(). Uses:
+                model.nStates, model.nActions, T (horizon), dt,
+                X_lb, X_ub, U_lb, U_ub (box bounds), dU_b (input rate bound),
+                Q, Qf, R, R_ (cost weights on state error, terminal error, input, input change)
+            model: provides integrate(x_bar, u_bar) -> (x_next, A_d, B_d, C_d)
         """
-        self.model  = model # model.integrate / model.forward_one_step
-        self.hasLSTM = getattr(self.model, "hasLSTM", False)
+        self.model  = model
         self.params = mpc_params
         self.nX     = mpc_params['model']['nStates']
         self.mU     = mpc_params['model']['nActions']
@@ -45,11 +41,6 @@ class MPC:
         self.w = cs.vertcat(self.vec(self.X), self.vec(self.U))
         self.lbw = cs.vertcat(X_lb, U_lb)
         self.ubw = cs.vertcat(X_ub, U_ub)
-        self.lbw = cs.vertcat(X_lb, U_lb)
-        self.lbw = cs.vertcat(X_lb, U_lb)
-
-        # When initialized, we do not have to re-define the problem at each iteration.
-        self.S = None
 
     def rollout(self, x_bar, u_bar):
         """
@@ -73,14 +64,18 @@ class MPC:
 
     def predict(self, x_bar_0, x_ref, u_bar, n_iters=1):
         """
-        Solves MPC problem over a reference track.
+        Solves the MPC problem by successive linearization: n_iters times, roll out u_bar through the
+        model, build a QP with the linearized dynamics, and use its actions as the next u_bar.
+
+        The model is restored to its state at the start of the call before each rollout, so models with
+        history (ResDSKBM) see the same history in every iteration. After the call, self.model holds the
+        history of the last rollout; callers that keep a separate copy should restore it.
 
         Params:
-            x_bar_0: current position of robot = first position of next robot
-            x_ref: reference x positions for MPC
-            u_bar: warm-start for actions
-            
-            
+            x_bar_0: current state of the robot
+            x_ref: (nX, T+1) reference trajectory
+            u_bar: (mU, T) warm-start for actions
+            n_iters: number of linearize-and-solve iterations
 
         Returns:
             X_mpc: optimized states
@@ -88,9 +83,6 @@ class MPC:
             x_ref: reference trajectory used to get optimized states / actions.
         """
         
-        # Make a copy of self.model here.
-        # Reinitialize to copy of self.model everytime.
-        import copy
         current_model = copy.deepcopy(self.model)
 
         for i_mpc_iter in range(n_iters):
