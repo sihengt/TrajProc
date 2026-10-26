@@ -12,25 +12,33 @@ torch.backends.cudnn.enabled = False
 
 class ResDSKBM(csDSKBM):
     """
-    DSKBM with a learned LSTM term added to the dynamics.
+    DSKBM with a learned LSTM term in the dynamics.
 
     The LSTM reads the last `trainPredSeqLen` pairs of (v, yaw) and action, and predicts mu. With
-    use_lstm=True the model used by the MPC is X_dot = f_kbm(X, U) + mu. mu is held constant over the
-    step: its Jacobians are not used, so it only enters the affine term C.
+    use_lstm=True the model used by the MPC at the linearization point (X_bar, U_bar) is:
+        target='residual' (CRN): X_dot = f_kbm(X_bar, U_bar) + mu
+        target='full'     (PDN): X_dot = mu
+    The network's Jacobians are not used: A and B always come from the KBM, and mu only changes the
+    affine term C.
     """
     LSTM_STATE_SLICE = slice(2, 4)  # the LSTM sees (v, yaw), not position
+    TARGETS = ('residual', 'full')
 
-    def __init__(self, params, use_lstm=True):
+    def __init__(self, params, use_lstm=True, target='residual'):
         """
         Params:
             params: [dict] contains all the parameters required for MPC to run. Uses 'mpc', 'network',
                 'controls', 'train' and 'dataDir' (the model dir that holds adm.pt).
-            use_lstm: [bool] if True, the LSTM term is added to the KBM in integrate() (CRN/PDN).
-                If False, integrate() uses the nominal KBM only (DSKBM baseline). The LSTM is loaded
-                either way so query_lstm() still works for diagnostics.
+            use_lstm: [bool] if True, integrate() uses the LSTM (CRN/PDN). If False, integrate() uses
+                the nominal KBM only (DSKBM baseline). The LSTM is loaded either way so query_lstm()
+                still works for diagnostics.
+            target: what the network was trained to predict: 'residual' (x_dot - f_kbm) or 'full' (x_dot).
         """
         super().__init__(params['mpc'])
+        if target not in self.TARGETS:
+            raise ValueError(f"target must be one of {self.TARGETS}, got {target!r}")
         self.use_lstm = use_lstm
+        self.target = target
         self.window_size = params['train']['trainPredSeqLen']
 
         self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -80,8 +88,12 @@ class ResDSKBM(csDSKBM):
         """
         A, B, C = self.linearize(X_bar, U_bar)
         if self.use_lstm:
-            mu = self.query_lstm().to("cpu")
-            C = C + cs.DM(mu.numpy().T)
+            mu = cs.DM(self.query_lstm().to("cpu").numpy().T)
+            if self.target == 'residual':
+                C = C + mu
+            else:
+                # Replace f_kbm(X_bar, U_bar) by mu, so A X_bar + B U_bar + C = mu.
+                C = C - self.f_x_dot(X_bar, U_bar) + mu
 
         # Update both x_q and u_q for querying during the next timestep
         self.update_queue(X_bar, U_bar)
