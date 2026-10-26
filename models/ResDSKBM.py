@@ -18,13 +18,17 @@ class ResDSKBM:
         3. Tracks position and velocity of CG.
     """
 
-    def __init__(self, params):
+    def __init__(self, params, use_lstm=True):
         """
         Constructor
 
         Params:
             params: [dict] contains all the parameters required for MPC to run.
-        """        
+            use_lstm: [bool] if True, the LSTM residual is added to the KBM in integrate() (CRN/PDN).
+                If False, integrate() uses the nominal KBM only (DSKBM baseline). The LSTM is loaded
+                either way so query_lstm() still works for diagnostics.
+        """
+        self.use_lstm = use_lstm
         mpc_params = params['mpc']
 
         self.nX = 4 
@@ -140,7 +144,7 @@ class ResDSKBM:
         return mean
 
     # TODO: include LSTM stuff
-    def integrate(self, X_bar, U_bar, use_lstm=True):
+    def integrate(self, X_bar, U_bar):
         """
         Params:
             X_bar: 
@@ -167,7 +171,7 @@ class ResDSKBM:
         curr_u = u_window[:, -1:, :].clone().detach().requires_grad_(True) # (1, 1, 3)        
 
         # To obtain C, we need to integrate f(\bar{x}, \bar{u}) using RK4
-        if use_lstm:
+        if self.use_lstm:
             mu = self.query_lstm(useHidden=False, updateHidden=False)
             mu = mu.to("cpu")
             C_res = cs.DM(mu.numpy().T) #- A_res @ X_bar - B_res @ U_bar
