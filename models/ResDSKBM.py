@@ -1,12 +1,10 @@
 import numpy as np
 import casadi as cs
 import torch
-import l4casadi as l4c
 import os
 from learning.architecture.dynamicsModel import AdaptiveDynamicsModel
 from collections import deque
 
-import torch.nn as nn
 
 torch.backends.cudnn.enabled = False
 
