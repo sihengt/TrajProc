@@ -81,11 +81,15 @@ class ResDSKBM(csDSKBM):
 
     def integrate(self, X_bar, U_bar):
         """
-        Linearizes the (KBM + LSTM) model at (X_bar, U_bar), then adds (X_bar, U_bar) to the history.
+        Adds (X_bar, U_bar) to the history, then linearizes the (KBM + LSTM) model at (X_bar, U_bar).
+
+        The LSTM window ends with (X_bar, U_bar), the step being predicted, as in training.
 
         Returns:
             x_kp1, A_d, B_d, C_d (see csDSKBM.step)
         """
+        self.update_queue(X_bar, U_bar)
+
         A, B, C = self.linearize(X_bar, U_bar)
         if self.use_lstm:
             mu = cs.DM(self.query_lstm().to("cpu").numpy().T)
@@ -94,8 +98,5 @@ class ResDSKBM(csDSKBM):
             else:
                 # Replace f_kbm(X_bar, U_bar) by mu, so A X_bar + B U_bar + C = mu.
                 C = C - self.f_x_dot(X_bar, U_bar) + mu
-
-        # Update both x_q and u_q for querying during the next timestep
-        self.update_queue(X_bar, U_bar)
 
         return self.step(X_bar, U_bar, A, B, C)
