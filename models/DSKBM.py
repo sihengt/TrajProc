@@ -96,6 +96,10 @@ class csDSKBM:
     def integrate(self, X_bar, U_bar):
         return self.step(X_bar, U_bar)
 
+    def next_state(self, X, U, c):
+        """Symbolic next state of step() for symbolic X, U and c (for solvers that build the problem once)."""
+        return self.f_step(X, U, c)[0]
+
     def init_rk4(self):
         x0 = cs.MX.sym("x0_int", self.N_STATES)
         u = cs.MX.sym("u_int", self.N_ACTIONS)

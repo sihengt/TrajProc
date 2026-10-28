@@ -1,4 +1,5 @@
 import copy
+import time
 from collections import namedtuple
 
 import casadi as cs
@@ -161,6 +162,7 @@ class MPC:
                 the cost enough, e.g. because the model's Jacobians are not exact)
             iterations: number of QPs solved
             cost: cost of the rolled-out plan for u_bar and after each accepted step
+            time: wall time of the call [s]
 
         The model is restored to its state at the start of the call before each rollout, so models with
         history (ResDSKBM) see the same history in every rollout. After the call, self.model holds the
@@ -178,7 +180,7 @@ class MPC:
             U_mpc: optimized actions
             x_ref: reference trajectory used to get optimized states / actions.
         """
-        
+        t_start = time.perf_counter()
         current_model = copy.deepcopy(self.model)
         u_bar = np.array(u_bar, dtype=float)
         x_bar, l_linearized_dynamics = self.rollout_from(current_model, x_bar_0, u_bar)
@@ -215,4 +217,5 @@ class MPC:
             self.stats['cost'].append(float(J))
 
         self.model = rollout_model
+        self.stats['time'] = time.perf_counter() - t_start
         return x_bar, u_bar, x_ref
