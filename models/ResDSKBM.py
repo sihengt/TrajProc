@@ -18,8 +18,8 @@ class ResDSKBM(csDSKBM):
     use_lstm=True the model used by the MPC at the linearization point (X_bar, U_bar) is:
         target='residual' (CRN): X_dot = f_kbm(X_bar, U_bar) + mu
         target='full'     (PDN): X_dot = mu
-    The network's Jacobians are not used: A and B always come from the KBM, and mu only changes the
-    affine term C.
+    The network's Jacobians are not used. For 'residual', A_d and B_d are the exact Jacobians of the step with mu
+    held fixed. For 'full', A_d and B_d are the ones of the KBM step.
     """
     LSTM_STATE_SLICE = slice(2, 4)  # the LSTM sees (v, yaw), not position
     TARGETS = ('residual', 'full')
@@ -90,13 +90,15 @@ class ResDSKBM(csDSKBM):
         """
         self.update_queue(X_bar, U_bar)
 
-        A, B, C = self.linearize(X_bar, U_bar)
-        if self.use_lstm:
-            mu = cs.DM(self.query_lstm().to("cpu").numpy().T)
-            if self.target == 'residual':
-                C = C + mu
-            else:
-                # Replace f_kbm(X_bar, U_bar) by mu, so A X_bar + B U_bar + C = mu.
-                C = C - self.f_x_dot(X_bar, U_bar) + mu
+        if not self.use_lstm:
+            return self.step(X_bar, U_bar)
 
-        return self.step(X_bar, U_bar, A, B, C)
+        mu = cs.DM(self.query_lstm().to("cpu").numpy().T)
+        if self.target == 'residual':
+            return self.step(X_bar, U_bar, mu)
+
+        # Replace f_kbm(X_bar, U_bar) by mu, so X_dot = mu at the linearization point. The network has no
+        # Jacobians here, so the QP gets the ones of the KBM step.
+        x_kp1, _, _, _ = self.step(X_bar, U_bar, mu - self.f_x_dot(X_bar, U_bar))
+        _, A_d, B_d, _ = self.step(X_bar, U_bar)
+        return x_kp1, A_d, B_d, x_kp1 - A_d @ X_bar - B_d @ U_bar

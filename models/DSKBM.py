@@ -1,5 +1,4 @@
 import casadi as cs
-import numpy as np
 
 
 class csDSKBM:
@@ -14,8 +13,9 @@ class csDSKBM:
         2. omega = velocity / turning radius
         3. Tracks position and velocity of CG.
 
-    integrate() linearizes the model at (X_bar, U_bar) and returns the next state together with the
-    discrete affine model X_{k+1} = A_d X_k + B_d U_k + C_d that the MPC uses as a constraint.
+    integrate() linearizes the model at (X_bar, U_bar), integrates the linear model for one dt, and returns the
+    next state together with the discrete affine model X_{k+1} = A_d X_k + B_d U_k + C_d that the MPC uses as a
+    constraint. A_d and B_d are the exact Jacobians of that next state w.r.t. (X_bar, U_bar).
     """
     N_STATES = 4
     N_ACTIONS = 3
@@ -42,6 +42,7 @@ class csDSKBM:
         self.get_A = cs.Function('get_A', [self.X, self.U], [cs.jacobian(X_dot, self.X)])
         self.get_B = cs.Function('get_B', [self.X, self.U], [cs.jacobian(X_dot, self.U)])
         self.RK4 = self.init_rk4()
+        self.f_step = self.init_step()
 
         self.dae = {'x': self.X, 'p': self.U, 'ode': X_dot}
         self._integrator = None
@@ -70,35 +71,30 @@ class csDSKBM:
         C = f_bar - A @ X_bar - B @ U_bar
         return A, B, C
 
-    def discretize(self, A, B, C):
+    def init_step(self):
         """
-        Discretizes X_dot = A X + B U + C over dt with a 4th-order series of exp(A dt).
+        Next state of one dt from X with the model linearized at (X, U) and a constant c added to X_dot, and its
+        Jacobians w.r.t. X and U (c held fixed). The Jacobians include how A, B and C change with (X, U).
         """
-        dt = self.dt
-        A_2 = A @ A
-        A_3 = A_2 @ A
-        # gamma = integral of exp(A s) ds over [0, dt], truncated at the same order.
-        gamma = dt * cs.DM(np.eye(self.N_STATES)) + dt**2 / 2 * A + dt**3 / 6 * A_2 + dt**4 / 24 * A_3
+        c = cs.MX.sym('c', self.N_STATES)
+        A, B, C = self.linearize(self.X, self.U)
+        x_next = self.RK4(self.X, self.U, A, B, C + c)
+        return cs.Function('step', [self.X, self.U, c],
+                           [x_next, cs.jacobian(x_next, self.X), cs.jacobian(x_next, self.U)],
+                           ['X', 'U', 'c'], ['x_next', 'A_d', 'B_d'])
 
-        A_d = cs.DM(np.eye(self.N_STATES)) + gamma @ A
-        B_d = gamma @ B
-        C_d = gamma @ C
-        return A_d, B_d, C_d
-
-    def step(self, X_bar, U_bar, A, B, C):
+    def step(self, X_bar, U_bar, c=0):
         """
-        Integrates the affine model A, B, C from X_bar for one dt (RK4) and discretizes it.
+        Integrates the model linearized at (X_bar, U_bar), with c added to X_dot, from X_bar for one dt (RK4).
 
         Returns:
-            x_kp1, A_d, B_d, C_d
+            x_kp1, A_d, B_d, C_d: next state and the affine model A_d X + B_d U + C_d tangent to it at (X_bar, U_bar)
         """
-        x_kp1 = self.RK4(X_bar, U_bar, A, B, C)
-        A_d, B_d, C_d = self.discretize(A, B, C)
-        return x_kp1, A_d, B_d, C_d
+        x_kp1, A_d, B_d = self.f_step(X_bar, U_bar, c)
+        return x_kp1, A_d, B_d, x_kp1 - A_d @ X_bar - B_d @ U_bar
 
     def integrate(self, X_bar, U_bar):
-        A, B, C = self.linearize(X_bar, U_bar)
-        return self.step(X_bar, U_bar, A, B, C)
+        return self.step(X_bar, U_bar)
 
     def init_rk4(self):
         x0 = cs.MX.sym("x0_int", self.N_STATES)
