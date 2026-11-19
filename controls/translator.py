@@ -11,6 +11,15 @@ class MpcAction:
         return np.array([self.com_acc, self.steer_f, self.steer_r])
 
 @dataclass
+class MpcSpeedAction:
+    v_cmd: float
+    steer_f: float
+    steer_r: float
+
+    def numpy(self):
+        return np.array([self.v_cmd, self.steer_f, self.steer_r])
+
+@dataclass
 class SimAction:
     wheel_speed: float
     steer_f: float
@@ -45,6 +54,9 @@ def SimToMpcState(x: SimState):
 def MpcToSimAction(wheel_r, dt, v_com_curr, u: MpcAction):
     v_next = v_com_curr + u.com_acc * dt
     return SimAction(v_next / wheel_r, u.steer_f, u.steer_r)
+
+def SpeedTargetToSimAction(wheel_r, u: MpcSpeedAction):
+    return SimAction(u.v_cmd / wheel_r, u.steer_f, u.steer_r)
 
 # class MpcToSimAction:
 #     """Converts (a, δ_f, δ_r) ↔ (ω, δ_f, δ_r)."""

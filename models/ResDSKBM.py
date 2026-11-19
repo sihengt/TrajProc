@@ -18,6 +18,7 @@ class ResDSKBM(csDSKBM):
     use_lstm=True the model used by the MPC at the linearization point (X_bar, U_bar) is:
         target='residual' (CRN): X_dot = f_kbm(X_bar, U_bar) + mu
         target='full'     (PDN): X_dot = mu
+    with f_kbm the nominal X_dot of the step (csDSKBM.nominal_x_dot).
     The network's Jacobians are not used. For 'residual', A_d and B_d are the exact Jacobians of the step with mu
     held fixed. For 'full', A_d and B_d are the ones of the KBM step.
     """
@@ -97,8 +98,8 @@ class ResDSKBM(csDSKBM):
         if self.target == 'residual':
             return self.step(X_bar, U_bar, mu)
 
-        # Replace f_kbm(X_bar, U_bar) by mu, so X_dot = mu at the linearization point. The network has no
+        # Replace the nominal X_dot by mu, so X_dot = mu at the linearization point. The network has no
         # Jacobians here, so the QP gets the ones of the KBM step.
-        x_kp1, _, _, _ = self.step(X_bar, U_bar, mu - self.f_x_dot(X_bar, U_bar))
+        x_kp1, _, _, _ = self.step(X_bar, U_bar, mu - self.nominal_x_dot(X_bar, U_bar))
         _, A_d, B_d, _ = self.step(X_bar, U_bar)
         return x_kp1, A_d, B_d, x_kp1 - A_d @ X_bar - B_d @ U_bar
